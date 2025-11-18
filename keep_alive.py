@@ -6,7 +6,11 @@ app = Flask(__name__)
 
 @app.route('/')
 def home():
-    return "Bot is alive!"
+    return "Math Bot is alive and running! 🧮"
+
+@app.route('/health')
+def health():
+    return "OK"
 
 def run_flask():
     port = int(os.environ.get('PORT', 5000))
