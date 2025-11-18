@@ -38,7 +38,11 @@ class SmartMathSolver:
     
     def format_expr(self, expr):
         """Форматирование выражения для вывода"""
-        expr_str = str(expr)
+        if isinstance(expr, str):
+            expr_str = expr
+        else:
+            expr_str = str(expr)
+            
         replacements = {
             '**': '^',
             '*': '⋅',
@@ -106,7 +110,7 @@ class SmartMathSolver:
             # Парсим выражение
             sympy_expr = sympify(processed_expr, locals={'x': self.x, 'y': self.y, 'z': self.z})
             
-            result = f"🧮 **Решаем:** `{expr_str}`\n\n"
+            result = f"🧮 Решаем: {expr_str}\n\n"
             
             if expr_type == 'fraction':
                 return result + self.solve_fraction(sympy_expr, expr_str)
@@ -124,7 +128,7 @@ class SmartMathSolver:
                 return result + self.solve_general(sympy_expr, expr_str)
                 
         except Exception as e:
-            return "❌ *Пример не понятный*"
+            return "❌ Пример не понятный"
     
     def solve_fraction(self, expr, expr_str):
         """Решение дробей"""
@@ -137,61 +141,61 @@ class SmartMathSolver:
             den_factored = factor(den)
             
             if num_factored != num or den_factored != den:
-                result += "**📝 Разложение на множители:**\n"
-                result += f"`{self.format_expr(num_factored)} / {self.format_expr(den_factored)}`\n\n"
+                result += "📝 Разложение на множители:\n"
+                result += f"{self.format_expr(num_factored)} / {self.format_expr(den_factored)}\n\n"
             
             # Сокращение
             simplified = cancel(expr)
             if simplified != expr:
-                result += "**📝 После сокращения:**\n"
-                result += f"`{self.format_expr(simplified)}`\n\n"
+                result += "📝 После сокращения:\n"
+                result += f"{self.format_expr(simplified)}\n\n"
             
             # Область определения
             if den.has(self.x):
                 solutions = solve(den, self.x)
                 if solutions:
-                    result += "**📝 Область определения:**\n"
+                    result += "📝 Область определения:\n"
                     for sol in solutions:
-                        result += f"`x ≠ {self.format_expr(sol)}`\n"
+                        result += f"x ≠ {self.format_expr(sol)}\n"
                     result += "\n"
             
-            result += "**✅ Ответ:**\n"
-            result += f"`{self.format_expr(simplified)}`"
+            result += "✅ Ответ:\n"
+            result += f"{self.format_expr(simplified)}"
             
             return result
             
         except Exception:
-            return "❌ *Пример не понятный*"
+            return "❌ Пример не понятный"
     
     def solve_polynomial(self, expr, expr_str):
         """Решение многочленов"""
         try:
             simplified = simplify(expr)
-            result = "**📝 Упрощение:**\n"
-            result += f"`{self.format_expr(simplified)}`\n\n"
+            result = "📝 Упрощение:\n"
+            result += f"{self.format_expr(simplified)}\n\n"
             
             # Разложение на множители
             factored = factor(simplified)
             if factored != simplified:
-                result += "**📝 Разложение на множители:**\n"
-                result += f"`{self.format_expr(factored)}`\n\n"
+                result += "📝 Разложение на множители:\n"
+                result += f"{self.format_expr(factored)}\n\n"
             
             # Корни для полиномов
             if simplified.is_polynomial() and simplified.has(self.x):
                 roots = solve(simplified, self.x)
                 if roots:
-                    result += "**📝 Корни:**\n"
+                    result += "📝 Корни:\n"
                     for i, root in enumerate(roots, 1):
-                        result += f"`x_{i} = {self.format_expr(root)}`\n"
+                        result += f"x_{i} = {self.format_expr(root)}\n"
                     result += "\n"
             
-            result += "**✅ Ответ:**\n"
-            result += f"`{self.format_expr(simplified)}`"
+            result += "✅ Ответ:\n"
+            result += f"{self.format_expr(simplified)}"
             
             return result
             
         except Exception:
-            return "❌ *Пример не понятный*"
+            return "❌ Пример не понятный"
     
     def solve_equation(self, expr_str):
         """Решение уравнений"""
@@ -212,7 +216,7 @@ class SmartMathSolver:
                     else:
                         equation = sympify(eq_part)
                 else:
-                    return "❌ *Пример не понятный*"
+                    return "❌ Пример не понятный"
             else:
                 # Простое уравнение
                 if '=' in processed:
@@ -220,52 +224,52 @@ class SmartMathSolver:
                     equation = sympify(left.strip()) - sympify(right.strip())
                     var = self.x
                 else:
-                    return "❌ *Пример не понятный*"
+                    return "❌ Пример не понятный"
             
             solutions = solve(equation, var)
             
-            result = "**📝 Решения уравнения:**\n"
+            result = "📝 Решения уравнения:\n"
             if solutions:
                 for i, sol in enumerate(solutions, 1):
-                    result += f"`{var}_{i} = {self.format_expr(sol)}`\n"
+                    result += f"{var}_{i} = {self.format_expr(sol)}\n"
             else:
                 result += "Решений нет"
             
             return result
             
         except Exception:
-            return "❌ *Пример не понятный*"
+            return "❌ Пример не понятный"
     
     def solve_numeric(self, expr, expr_str):
         """Решение числовых выражений"""
         try:
             value = float(expr)
-            result = "**✅ Ответ:**\n"
-            result += f"`{value}`"
+            result = "✅ Ответ:\n"
+            result += f"{value}"
             
             if value != int(value):
-                result += f"\n\n**📝 Дробь:** `{expr}`"
+                result += f"\n\n📝 Дробь: {expr}"
             
             return result
             
         except Exception:
-            return "❌ *Пример не понятный*"
+            return "❌ Пример не понятный"
     
     def solve_general(self, expr, expr_str):
         """Решение общих выражений"""
         try:
             simplified = simplify(expr)
             
-            result = "**✅ Ответ:**\n"
-            result += f"`{self.format_expr(simplified)}`"
+            result = "✅ Ответ:\n"
+            result += f"{self.format_expr(simplified)}"
             
             if simplified.is_number:
-                result += f"\n\n**📝 Число:** `{float(simplified)}`"
+                result += f"\n\n📝 Число: {float(simplified)}"
             
             return result
             
         except Exception:
-            return "❌ *Пример не понятный*"
+            return "❌ Пример не понятный"
 
 solver = SmartMathSolver()
 
@@ -276,23 +280,18 @@ def recognize_text_safe(image_path):
     
     try:
         image = Image.open(image_path)
-        # Увеличиваем изображение для лучшего распознавания
-        image = image.resize((image.width * 2, image.height * 2), Image.Resampling.LANCZOS)
-        image = image.convert('L')  # Grayscale
-        
-        # Конфигурация для математических выражений
-        custom_config = r'--oem 3 --psm 6 -c tessedit_char_whitelist=0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ()[]{}/*+-=^'
-        text = pytesseract.image_to_string(image, config=custom_config)
+        image = image.convert('L')
+        text = pytesseract.image_to_string(image)
         text = text.strip()
         
         if not text:
             return "Текст не распознан"
         
-        # Замены для математических символов
+        # Простые замены
         replacements = {
             'х': 'x', 'у': 'y', 'з': 'z', 
             '—': '-', '–': '-', '×': '*',
-            '÷': '/', 'с': 'c', 'о': 'o'
+            '÷': '/'
         }
         
         for old, new in replacements.items():
@@ -305,21 +304,20 @@ def recognize_text_safe(image_path):
 
 async def start(update: Update, context: CallbackContext):
     user = update.effective_user
-    text = f"""
-👋 Привет, {user.first_name}!
+    text = f"""👋 Привет, {user.first_name}!
 
 Я умный математический бот! 🧠
 
-**Просто напиши пример:**
-• `3*x^2 - 12*x + 12` - многочлены
-• `(x^2 - 4)/(x - 2)` - дроби  
-• `x^2 - 5*x + 6 = 0` - уравнения
-• `2 + 3 * 4^2` - числовые
+Просто напиши пример и я решу его:
 
-💡 **Важно:** Используй * для умножения: `3*x` вместо `3x`
+• 3*x^2 - 12*x + 12 - многочлены
+• (x^2 - 4)/(x - 2) - дроби  
+• x^2 - 5*x + 6 = 0 - уравнения
+• 2 + 3 * 4^2 - числовые
 
-Я сам пойму что ты хочешь! ✨
-    """
+💡 Важно: Используй * для умножения: 3*x вместо 3x
+
+Я сам пойму что ты хочешь! ✨"""
     
     keyboard = [
         [InlineKeyboardButton("🧮 Примеры", callback_data="examples")],
@@ -337,7 +335,7 @@ async def handle_text(update: Update, context: CallbackContext):
     result = solver.solve_expression(user_input)
     
     keyboard = [[InlineKeyboardButton("🧮 Новый пример", callback_data="new")]]
-    await update.message.reply_text(result, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='Markdown')
+    await update.message.reply_text(result, reply_markup=InlineKeyboardMarkup(keyboard))
 
 async def handle_photo(update: Update, context: CallbackContext):
     if not TESSERACT_AVAILABLE:
@@ -359,14 +357,14 @@ async def handle_photo(update: Update, context: CallbackContext):
             await update.message.reply_text("❌ Не вижу пример на фото")
             return
         
-        await update.message.reply_text(f"📸 Вижу: `{text}`")
+        await update.message.reply_text(f"📸 Вижу: {text}")
         
         # Предобработка распознанного текста
         processed_text = solver.preprocess_expression(text)
         result = solver.solve_expression(processed_text)
         
         keyboard = [[InlineKeyboardButton("📸 Еще фото", callback_data="photo_help")]]
-        await update.message.reply_text(result, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='Markdown')
+        await update.message.reply_text(result, reply_markup=InlineKeyboardMarkup(keyboard))
         
     except Exception as e:
         await update.message.reply_text("❌ Ошибка с фото")
@@ -376,56 +374,48 @@ async def button_handler(update: Update, context: CallbackContext):
     await query.answer()
     
     if query.data == "examples":
-        text = """
-🧮 **Примеры:**
+        text = """🧮 Примеры:
 
-**Многочлены:**
-`3*x^2 - 12*x + 12`
-`x^2 + 2*x + 1`
-`2*x^3 - 5*x^2 + 3*x`
+Многочлены:
+3*x^2 - 12*x + 12
+x^2 + 2*x + 1
+2*x^3 - 5*x^2 + 3*x
 
-**Дроби:**
-`(x^2 - 4)/(x - 2)`
-`1/(x+1) + 2/(x-1)`
+Дроби:
+(x^2 - 4)/(x - 2)
+1/(x+1) + 2/(x-1)
 
-**Уравнения:**
-`x^2 - 5*x + 6 = 0`
-`solve(x^2 - 9 = 0, x)`
+Уравнения:
+x^2 - 5*x + 6 = 0
+solve(x^2 - 9 = 0, x)
 
-**Числовые:**
-`2 + 3 * 4^2`
-`(15 - 3) / 4`
-        """
-        await query.edit_message_text(text, parse_mode='Markdown')
+Числовые:
+2 + 3 * 4^2
+(15 - 3) / 4"""
+        await query.edit_message_text(text)
     
     elif query.data == "syntax":
-        text = """
-📝 **Как писать:**
+        text = """📝 Как писать:
 
-• Умножение: `3*x` (обязательно!)
-• Степень: `x^2` или `x**2`  
-• Дроби: `(a+b)/(c+d)`
-• Уравнения: `x^2 - 4 = 0`
-• Производные: `diff(x^2, x)`
-• Интегралы: `integrate(x^2, x)`
+• Умножение: 3*x (обязательно!)
+• Степень: x^2 или x**2  
+• Дроби: (a+b)/(c+d)
+• Уравнения: x^2 - 4 = 0
 
-💡 **Важно:** Всегда ставь * между числами и переменными!
-        """
-        await query.edit_message_text(text, parse_mode='Markdown')
+💡 Важно: Всегда ставь * между числами и переменными!"""
+        await query.edit_message_text(text)
     
     elif query.data == "photo_help":
-        text = """
-📸 **Фото:**
+        text = """📸 Фото:
 
 • Четкий печатный текст
 • Хорошее освещение
 • Пример в одну строку
 • Используй * для умножения
 
-✅ **Хорошо:** `3*x^2 - 12`
-❌ **Плохо:** `3x^2 - 12`
-        """
-        await query.edit_message_text(text, parse_mode='Markdown')
+✅ Хорошо: 3*x^2 - 12
+❌ Плохо: 3x^2 - 12"""
+        await query.edit_message_text(text)
     
     elif query.data == "new":
         await query.edit_message_text("✍️ Напиши пример:")
