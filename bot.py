@@ -5,7 +5,7 @@ import re
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, CallbackContext, CallbackQueryHandler
 import sympy as sp
-from sympy import sympify, factor, cancel, apart, expand, simplify, solve, diff, integrate, symbols, fraction, Poly
+from sympy import sympify, factor, cancel, apart, expand, simplify, solve, diff, integrate, symbols, fraction
 from PIL import Image
 import pytesseract
 
@@ -49,6 +49,21 @@ class SmartMathSolver:
             expr_str = expr_str.replace(old, new)
         return expr_str
     
+    def preprocess_expression(self, expr_str):
+        """Предобработка выражения - добавляет * между числами и переменными"""
+        # Добавляем * между цифрами и буквами (3x -> 3*x)
+        expr_str = re.sub(r'(\d)([a-zA-Z])', r'\1*\2', expr_str)
+        # Добавляем * между буквами и скобками (x( -> x*()
+        expr_str = re.sub(r'([a-zA-Z])\(', r'\1*(', expr_str)
+        # Добавляем * между скобками )( -> )*(
+        expr_str = re.sub(r'\)\(', ')*(', expr_str)
+        
+        # Заменяем символы
+        expr_str = expr_str.replace('^', '**').replace('=', '==')
+        expr_str = expr_str.replace('÷', '/').replace('×', '*')
+        
+        return expr_str
+    
     def detect_type(self, expr_str):
         """Автоопределение типа примера"""
         expr_clean = expr_str.lower().replace(' ', '')
@@ -58,19 +73,19 @@ class SmartMathSolver:
             return 'equation'
         
         # Производные
-        if 'diff(' in expr_clean or 'derivative' in expr_clean:
+        if 'diff(' in expr_clean:
             return 'derivative'
         
         # Интегралы
-        if 'integrate(' in expr_clean or '∫' in expr_clean:
+        if 'integrate(' in expr_clean:
             return 'integral'
         
         # Дроби (есть деление и переменные/скобки)
         if '/' in expr_clean and ('(' in expr_clean or 'x' in expr_clean or 'y' in expr_clean):
             return 'fraction'
         
-        # Многочлены (переменные со степенями)
-        if any(char in expr_clean for char in ['x^', 'y^', 'z^', 'x**', 'y**', 'z**']):
+        # Многочлены (переменные со степенями или умножениями)
+        if any(char in expr_clean for char in ['x', 'y', 'z']) and any(op in expr_clean for op in ['+', '-', '*', '^']):
             return 'polynomial'
         
         # Числовые выражения
@@ -82,18 +97,16 @@ class SmartMathSolver:
     def solve_expression(self, expr_str):
         """Умное решение с автоопределением типа"""
         try:
-            # Очистка выражения
-            expr_clean = expr_str.strip()
-            expr_clean = expr_clean.replace('^', '**').replace('=', '==')
-            expr_clean = expr_clean.replace('÷', '/').replace('×', '*')
+            # Предобработка выражения
+            processed_expr = self.preprocess_expression(expr_str)
             
             # Определяем тип
             expr_type = self.detect_type(expr_str)
             
             # Парсим выражение
-            sympy_expr = sympify(expr_clean, locals={'x': self.x, 'y': self.y, 'z': self.z})
+            sympy_expr = sympify(processed_expr, locals={'x': self.x, 'y': self.y, 'z': self.z})
             
-            result = f"🧮 **Решаем:** `{self.format_expr(expr_str)}`\n\n"
+            result = f"🧮 **Решаем:** `{expr_str}`\n\n"
             
             if expr_type == 'fraction':
                 return result + self.solve_fraction(sympy_expr, expr_str)
@@ -110,7 +123,7 @@ class SmartMathSolver:
             else:
                 return result + self.solve_general(sympy_expr, expr_str)
                 
-        except Exception:
+        except Exception as e:
             return "❌ *Пример не понятный*"
     
     def solve_fraction(self, expr, expr_str):
@@ -150,47 +163,6 @@ class SmartMathSolver:
         except Exception:
             return "❌ *Пример не понятный*"
     
-    def solve_equation(self, expr_str):
-        """Решение уравнений"""
-        try:
-            # Извлекаем уравнение
-            if 'solve(' in expr_str:
-                match = re.search(r'solve\((.*),\s*(\w+)\)', expr_str)
-                if match:
-                    eq_part = match.group(1).strip()
-                    var_str = match.group(2).strip()
-                    var = symbols(var_str)
-                    
-                    if '==' in eq_part:
-                        left, right = eq_part.split('==', 1)
-                        equation = sympify(left) - sympify(right)
-                    else:
-                        equation = sympify(eq_part)
-                else:
-                    return "❌ *Пример не понятный*"
-            else:
-                # Простое уравнение
-                if '=' in expr_str:
-                    left, right = expr_str.split('=', 1)
-                    equation = sympify(left.strip()) - sympify(right.strip())
-                    var = self.x
-                else:
-                    return "❌ *Пример не понятный*"
-            
-            solutions = solve(equation, var)
-            
-            result = "**📝 Решения уравнения:**\n"
-            if solutions:
-                for i, sol in enumerate(solutions, 1):
-                    result += f"`{var}_{i} = {self.format_expr(sol)}`\n"
-            else:
-                result += "Решений нет"
-            
-            return result
-            
-        except Exception:
-            return "❌ *Пример не понятный*"
-    
     def solve_polynomial(self, expr, expr_str):
         """Решение многочленов"""
         try:
@@ -221,6 +193,49 @@ class SmartMathSolver:
         except Exception:
             return "❌ *Пример не понятный*"
     
+    def solve_equation(self, expr_str):
+        """Решение уравнений"""
+        try:
+            processed = self.preprocess_expression(expr_str)
+            
+            # Извлекаем уравнение
+            if 'solve(' in processed:
+                match = re.search(r'solve\((.*),\s*(\w+)\)', processed)
+                if match:
+                    eq_part = match.group(1).strip()
+                    var_str = match.group(2).strip()
+                    var = symbols(var_str)
+                    
+                    if '==' in eq_part:
+                        left, right = eq_part.split('==', 1)
+                        equation = sympify(left) - sympify(right)
+                    else:
+                        equation = sympify(eq_part)
+                else:
+                    return "❌ *Пример не понятный*"
+            else:
+                # Простое уравнение
+                if '=' in processed:
+                    left, right = processed.split('=', 1)
+                    equation = sympify(left.strip()) - sympify(right.strip())
+                    var = self.x
+                else:
+                    return "❌ *Пример не понятный*"
+            
+            solutions = solve(equation, var)
+            
+            result = "**📝 Решения уравнения:**\n"
+            if solutions:
+                for i, sol in enumerate(solutions, 1):
+                    result += f"`{var}_{i} = {self.format_expr(sol)}`\n"
+            else:
+                result += "Решений нет"
+            
+            return result
+            
+        except Exception:
+            return "❌ *Пример не понятный*"
+    
     def solve_numeric(self, expr, expr_str):
         """Решение числовых выражений"""
         try:
@@ -230,58 +245,6 @@ class SmartMathSolver:
             
             if value != int(value):
                 result += f"\n\n**📝 Дробь:** `{expr}`"
-            
-            return result
-            
-        except Exception:
-            return "❌ *Пример не понятный*"
-    
-    def solve_derivative(self, expr_str):
-        """Решение производных"""
-        try:
-            if 'diff(' in expr_str:
-                match = re.search(r'diff\((.*),\s*(\w+)\)', expr_str)
-                if match:
-                    func_str = match.group(1).strip()
-                    var_str = match.group(2).strip()
-                    func = sympify(func_str)
-                    var = symbols(var_str)
-                else:
-                    return "❌ *Пример не понятный*"
-            else:
-                return "❌ *Пример не понятный*"
-            
-            derivative = diff(func, var)
-            simplified = simplify(derivative)
-            
-            result = "**✅ Производная:**\n"
-            result += f"`{self.format_expr(simplified)}`"
-            
-            return result
-            
-        except Exception:
-            return "❌ *Пример не понятный*"
-    
-    def solve_integral(self, expr_str):
-        """Решение интегралов"""
-        try:
-            if 'integrate(' in expr_str:
-                match = re.search(r'integrate\((.*),\s*(\w+)\)', expr_str)
-                if match:
-                    func_str = match.group(1).strip()
-                    var_str = match.group(2).strip()
-                    func = sympify(func_str)
-                    var = symbols(var_str)
-                else:
-                    return "❌ *Пример не понятный*"
-            else:
-                return "❌ *Пример не понятный*"
-            
-            integral = integrate(func, var)
-            simplified = simplify(integral)
-            
-            result = "**✅ Интеграл:**\n"
-            result += f"`{self.format_expr(simplified)} + C`"
             
             return result
             
@@ -313,22 +276,32 @@ def recognize_text_safe(image_path):
     
     try:
         image = Image.open(image_path)
-        image = image.convert('L')
-        text = pytesseract.image_to_string(image)
+        # Увеличиваем изображение для лучшего распознавания
+        image = image.resize((image.width * 2, image.height * 2), Image.Resampling.LANCZOS)
+        image = image.convert('L')  # Grayscale
+        
+        # Конфигурация для математических выражений
+        custom_config = r'--oem 3 --psm 6 -c tessedit_char_whitelist=0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ()[]{}/*+-=^'
+        text = pytesseract.image_to_string(image, config=custom_config)
         text = text.strip()
         
         if not text:
             return "Текст не распознан"
         
-        # Простые замены
-        replacements = {'х': 'x', 'у': 'y', '—': '-', '×': '*', '÷': '/'}
+        # Замены для математических символов
+        replacements = {
+            'х': 'x', 'у': 'y', 'з': 'z', 
+            '—': '-', '–': '-', '×': '*',
+            '÷': '/', 'с': 'c', 'о': 'o'
+        }
+        
         for old, new in replacements.items():
             text = text.replace(old, new)
             
         return text
         
-    except Exception:
-        return "Ошибка распознавания"
+    except Exception as e:
+        return f"Ошибка: {str(e)}"
 
 async def start(update: Update, context: CallbackContext):
     user = update.effective_user
@@ -337,13 +310,13 @@ async def start(update: Update, context: CallbackContext):
 
 Я умный математический бот! 🧠
 
-Просто напиши пример и я решу его:
-
-• `(x^2 - 4)/(x - 2)` - дроби
-• `x^2 - 5x + 6 = 0` - уравнения  
+**Просто напиши пример:**
+• `3*x^2 - 12*x + 12` - многочлены
+• `(x^2 - 4)/(x - 2)` - дроби  
+• `x^2 - 5*x + 6 = 0` - уравнения
 • `2 + 3 * 4^2` - числовые
-• `diff(x^2, x)` - производные
-• `integrate(x^2, x)` - интегралы
+
+💡 **Важно:** Используй * для умножения: `3*x` вместо `3x`
 
 Я сам пойму что ты хочешь! ✨
     """
@@ -368,7 +341,7 @@ async def handle_text(update: Update, context: CallbackContext):
 
 async def handle_photo(update: Update, context: CallbackContext):
     if not TESSERACT_AVAILABLE:
-        await update.message.reply_text("📸 Фото временно не работают")
+        await update.message.reply_text("📸 Распознавание фото временно недоступно")
         return
     
     try:
@@ -382,17 +355,20 @@ async def handle_photo(update: Update, context: CallbackContext):
         text = recognize_text_safe(temp_path)
         os.unlink(temp_path)
         
-        if "не распознан" in text or "ошибка" in text:
+        if "не распознан" in text.lower() or "ошибка" in text.lower():
             await update.message.reply_text("❌ Не вижу пример на фото")
             return
         
         await update.message.reply_text(f"📸 Вижу: `{text}`")
-        result = solver.solve_expression(text)
+        
+        # Предобработка распознанного текста
+        processed_text = solver.preprocess_expression(text)
+        result = solver.solve_expression(processed_text)
         
         keyboard = [[InlineKeyboardButton("📸 Еще фото", callback_data="photo_help")]]
         await update.message.reply_text(result, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='Markdown')
         
-    except Exception:
+    except Exception as e:
         await update.message.reply_text("❌ Ошибка с фото")
 
 async def button_handler(update: Update, context: CallbackContext):
@@ -403,23 +379,22 @@ async def button_handler(update: Update, context: CallbackContext):
         text = """
 🧮 **Примеры:**
 
+**Многочлены:**
+`3*x^2 - 12*x + 12`
+`x^2 + 2*x + 1`
+`2*x^3 - 5*x^2 + 3*x`
+
 **Дроби:**
 `(x^2 - 4)/(x - 2)`
 `1/(x+1) + 2/(x-1)`
 
 **Уравнения:**
-`x^2 - 5x + 6 = 0`
+`x^2 - 5*x + 6 = 0`
 `solve(x^2 - 9 = 0, x)`
 
 **Числовые:**
 `2 + 3 * 4^2`
 `(15 - 3) / 4`
-
-**Производные:**
-`diff(x^3, x)`
-
-**Интегралы:**
-`integrate(x^2, x)`
         """
         await query.edit_message_text(text, parse_mode='Markdown')
     
@@ -427,12 +402,14 @@ async def button_handler(update: Update, context: CallbackContext):
         text = """
 📝 **Как писать:**
 
-• Степень: `x^2` или `x**2`
-• Умножение: `2*x` или `2⋅x`  
+• Умножение: `3*x` (обязательно!)
+• Степень: `x^2` или `x**2`  
 • Дроби: `(a+b)/(c+d)`
 • Уравнения: `x^2 - 4 = 0`
 • Производные: `diff(x^2, x)`
 • Интегралы: `integrate(x^2, x)`
+
+💡 **Важно:** Всегда ставь * между числами и переменными!
         """
         await query.edit_message_text(text, parse_mode='Markdown')
     
@@ -440,10 +417,13 @@ async def button_handler(update: Update, context: CallbackContext):
         text = """
 📸 **Фото:**
 
-• Четкий текст
-• Хороший свет
-• Одна строка
-• Печатные буквы
+• Четкий печатный текст
+• Хорошее освещение
+• Пример в одну строку
+• Используй * для умножения
+
+✅ **Хорошо:** `3*x^2 - 12`
+❌ **Плохо:** `3x^2 - 12`
         """
         await query.edit_message_text(text, parse_mode='Markdown')
     
@@ -463,7 +443,10 @@ def main():
     app.add_handler(CallbackQueryHandler(button_handler))
     app.add_handler(MessageHandler(filters.ALL, handle_any))
     
-    logger.info("Бот запущен!")
+    logger.info("🤖 Бот запущен!")
+    if not TESSERACT_AVAILABLE:
+        logger.warning("Tesseract OCR недоступен")
+    
     app.run_polling()
 
 if __name__ == '__main__':
