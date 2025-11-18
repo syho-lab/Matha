@@ -410,6 +410,79 @@ class MegaMathSolver:
             
         except Exception as e:
             return f"❌ Ошибка вычисления: {str(e)}"
+
+    # ДОБАВЛЕННЫЕ МЕТОДЫ ДЛЯ ИСПРАВЛЕНИЯ ОШИБКИ
+    def solve_derivative_mega(self, expr, original_str: str, analysis: Dict) -> str:
+        """МЕГА-решение производных"""
+        try:
+            result = "📝 *ШАГ 1: Нахождение производной*\n"
+            derivative = diff(expr, self.x)
+            simplified = simplify(derivative)
+            
+            result += f"`{self.format_math(simplified)}`\n\n"
+            result += "🎯 *ПРОИЗВОДНАЯ:*\n"
+            result += f"```\n{self.format_math(simplified)}\n```"
+            
+            return result
+        except Exception as e:
+            return f"❌ Ошибка нахождения производной: {str(e)}"
+
+    def solve_integral_mega(self, expr, original_str: str, analysis: Dict) -> str:
+        """МЕГА-решение интегралов"""
+        try:
+            result = "📝 *ШАГ 1: Нахождение интеграла*\n"
+            integral = integrate(expr, self.x)
+            simplified = simplify(integral)
+            
+            result += f"`{self.format_math(simplified)}`\n\n"
+            result += "🎯 *ИНТЕГРАЛ:*\n"
+            result += f"```\n{self.format_math(simplified)} + C\n```"
+            
+            return result
+        except Exception as e:
+            return f"❌ Ошибка нахождения интеграла: {str(e)}"
+
+    def solve_trigonometric_mega(self, expr, original_str: str, analysis: Dict) -> str:
+        """МЕГА-решение тригонометрических выражений"""
+        try:
+            result = "📝 *ШАГ 1: Упрощение*\n"
+            simplified = trigsimp(expr)
+            result += f"`{self.format_math(simplified)}`\n\n"
+            
+            result += "🎯 *ФИНАЛЬНЫЙ ОТВЕТ:*\n"
+            result += f"```\n{self.format_math(simplified)}\n```"
+            
+            return result
+        except Exception as e:
+            return f"❌ Ошибка упрощения тригонометрического выражения: {str(e)}"
+
+    def solve_limit_mega(self, expr, original_str: str, analysis: Dict) -> str:
+        """МЕГА-решение пределов"""
+        try:
+            result = "📝 *ШАГ 1: Нахождение предела*\n"
+            lim = limit(expr, self.x, 0)  # Базовый предел
+            result += f"`{self.format_math(lim)}`\n\n"
+            
+            result += "🎯 *ПРЕДЕЛ:*\n"
+            result += f"```\n{self.format_math(lim)}\n```"
+            
+            return result
+        except Exception as e:
+            return f"❌ Ошибка нахождения предела: {str(e)}"
+
+    def solve_series_mega(self, expr, original_str: str, analysis: Dict) -> str:
+        """МЕГА-решение рядов"""
+        try:
+            result = "📝 *ШАГ 1: Разложение в ряд*\n"
+            series_exp = series(expr, self.x, 0, 4)  # Разложение до 4 порядка
+            result += f"`{self.format_math(series_exp)}`\n\n"
+            
+            result += "🎯 *РАЗЛОЖЕНИЕ В РЯД:*\n"
+            result += f"```\n{self.format_math(series_exp)}\n```"
+            
+            return result
+        except Exception as e:
+            return f"❌ Ошибка разложения в ряд: {str(e)}"
     
     def solve_general_mega(self, expr, original_str: str, analysis: Dict) -> str:
         """МЕГА-решение общих выражений"""
@@ -893,6 +966,18 @@ async def handle_callback_query(update: Update, context: CallbackContext):
             "• `(x^2 - 4)/(x - 2)`\n"
             "• `x^2 - 5*x + 6 = 0`\n\n"
             "🎯 Я сам пойму что нужно сделать!",
+            parse_mode='Markdown'
+        )
+
+    # Добавляем обработчики для новых кнопок
+    elif query.data in ["analyze_solution", "similar_problems"]:
+        await query.edit_message_text(
+            "🔧 *Эта функция в разработке*\n\n"
+            "Скоро здесь появятся:\n"
+            "• Подробный анализ решения\n"
+            "• Похожие задачи для тренировки\n"
+            "• Рекомендации по улучшению\n\n"
+            "А пока попробуйте другие примеры! 🚀",
             parse_mode='Markdown'
         )
 
