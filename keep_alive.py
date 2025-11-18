@@ -6,7 +6,7 @@ app = Flask(__name__)
 
 @app.route('/')
 def home():
-    return "🤖 ULTRA MATH BOT IS RUNNING! 🚀"
+    return "🎯 ULTRA MATH BOT IS RUNNING!"
 
 @app.route('/health')
 def health():
