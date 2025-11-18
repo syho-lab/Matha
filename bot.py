@@ -1,27 +1,26 @@
 import os
 import logging
 import tempfile
+import re
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, CallbackContext, CallbackQueryHandler
 import sympy as sp
-from sympy import sympify, factor, cancel, apart, expand, simplify, solve, diff, integrate, symbols
+from sympy import sympify, factor, cancel, apart, expand, simplify, solve, diff, integrate, symbols, fraction, Poly
 from PIL import Image
 import pytesseract
 
-# Безопасная настройка pytesseract
+# Настройка pytesseract
 try:
     pytesseract.pytesseract.tesseract_cmd = '/usr/bin/tesseract'
     TESSERACT_AVAILABLE = True
-except Exception as e:
-    logging.warning(f"Tesseract not available: {e}")
+except:
     TESSERACT_AVAILABLE = False
 
 try:
     from keep_alive import keep_alive
     keep_alive()
-    logging.info("Flask server started for monitoring")
-except ImportError as e:
-    logging.warning(f"Flask not available: {e}")
+except:
+    pass
 
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
@@ -30,454 +29,442 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 BOT_TOKEN = os.environ.get('BOT_TOKEN')
-
 if not BOT_TOKEN:
-    raise ValueError("❌ BOT_TOKEN не установлен")
+    raise ValueError("BOT_TOKEN не установлен")
 
 class SmartMathSolver:
     def __init__(self):
         self.x, self.y, self.z = symbols('x y z')
-        self.a, self.b, self.c = symbols('a b c')
     
-    def format_expression(self, expr):
-        """Умное форматирование выражений"""
-        if isinstance(expr, str):
-            expr_str = expr
-        else:
-            expr_str = str(expr)
-            
+    def format_expr(self, expr):
+        """Форматирование выражения для вывода"""
+        expr_str = str(expr)
         replacements = {
             '**': '^',
             '*': '⋅',
             'sqrt': '√',
-            'pi': 'π',
-            'oo': '∞',
-            'exp': 'e^'
+            'pi': 'π'
         }
         for old, new in replacements.items():
             expr_str = expr_str.replace(old, new)
         return expr_str
     
-    def solve_expression(self, expression: str) -> str:
-        """Умный решатель с определением типа выражения"""
+    def detect_type(self, expr_str):
+        """Автоопределение типа примера"""
+        expr_clean = expr_str.lower().replace(' ', '')
+        
+        # Уравнения
+        if 'solve(' in expr_clean or ('=' in expr_clean and 'x' in expr_clean):
+            return 'equation'
+        
+        # Производные
+        if 'diff(' in expr_clean or 'derivative' in expr_clean:
+            return 'derivative'
+        
+        # Интегралы
+        if 'integrate(' in expr_clean or '∫' in expr_clean:
+            return 'integral'
+        
+        # Дроби (есть деление и переменные/скобки)
+        if '/' in expr_clean and ('(' in expr_clean or 'x' in expr_clean or 'y' in expr_clean):
+            return 'fraction'
+        
+        # Многочлены (переменные со степенями)
+        if any(char in expr_clean for char in ['x^', 'y^', 'z^', 'x**', 'y**', 'z**']):
+            return 'polynomial'
+        
+        # Числовые выражения
+        if all(char in '0123456789+-*/.()^ ' for char in expr_clean):
+            return 'numeric'
+        
+        return 'general'
+    
+    def solve_expression(self, expr_str):
+        """Умное решение с автоопределением типа"""
         try:
-            # Очистка и подготовка выражения
-            expr = expression.strip()
-            expr = expr.replace('^', '**').replace('=', '==')
-            expr = expr.replace('÷', '/').replace('×', '*')
+            # Очистка выражения
+            expr_clean = expr_str.strip()
+            expr_clean = expr_clean.replace('^', '**').replace('=', '==')
+            expr_clean = expr_clean.replace('÷', '/').replace('×', '*')
+            
+            # Определяем тип
+            expr_type = self.detect_type(expr_str)
             
             # Парсим выражение
-            sympy_expr = sympify(expr, locals={
-                'x': self.x, 'y': self.y, 'z': self.z,
-                'a': self.a, 'b': self.b, 'c': self.c
-            })
+            sympy_expr = sympify(expr_clean, locals={'x': self.x, 'y': self.y, 'z': self.z})
             
-            result = f"🧮 **РЕШЕНИЕ ПРИМЕРА**\n\n"
-            result += f"**Дано:** `{self.format_expression(expression)}`\n\n"
+            result = f"🧮 **Решаем:** `{self.format_expr(expr_str)}`\n\n"
             
-            # Определяем тип и решаем
-            if sympy_expr.is_rational_function():
-                return result + self.solve_rational(sympy_expr, expression)
-            elif 'solve' in expression.lower():
-                return result + self.solve_equation(expression)
-            elif 'diff' in expression.lower():
-                return result + self.solve_derivative(expression)
-            elif sympy_expr.is_polynomial():
-                return result + self.solve_polynomial(sympy_expr, expression)
-            elif sympy_expr.is_number:
-                return result + self.solve_numeric(sympy_expr, expression)
+            if expr_type == 'fraction':
+                return result + self.solve_fraction(sympy_expr, expr_str)
+            elif expr_type == 'equation':
+                return result + self.solve_equation(expr_str)
+            elif expr_type == 'polynomial':
+                return result + self.solve_polynomial(sympy_expr, expr_str)
+            elif expr_type == 'numeric':
+                return result + self.solve_numeric(sympy_expr, expr_str)
+            elif expr_type == 'derivative':
+                return result + self.solve_derivative(expr_str)
+            elif expr_type == 'integral':
+                return result + self.solve_integral(expr_str)
             else:
-                return result + self.solve_general(sympy_expr, expression)
+                return result + self.solve_general(sympy_expr, expr_str)
                 
-        except Exception as e:
-            return f"❌ **Ошибка:** Не могу решить этот пример\n`{str(e)}`\n\nПопробуйте другой пример или используйте /help"
+        except Exception:
+            return "❌ *Пример не понятный*"
     
-    def solve_rational(self, expr, original_str):
-        """Умное решение рациональных выражений"""
-        result = ""
-        
+    def solve_fraction(self, expr, expr_str):
+        """Решение дробей"""
         try:
-            # Получаем числитель и знаменатель
-            num, den = expr.as_numer_denom()
-            
-            result += "**📝 Шаг 1: Анализ дроби**\n"
-            result += f"`{self.format_expression(original_str)}`\n\n"
+            num, den = fraction(expr)
+            result = ""
             
             # Разложение на множители
             num_factored = factor(num)
             den_factored = factor(den)
             
             if num_factored != num or den_factored != den:
-                result += "**📝 Шаг 2: Разложение на множители**\n"
-                result += f"Числитель: `{self.format_expression(num)}` = `{self.format_expression(num_factored)}`\n"
-                result += f"Знаменатель: `{self.format_expression(den)}` = `{self.format_expression(den_factored)}`\n\n"
+                result += "**📝 Разложение на множители:**\n"
+                result += f"`{self.format_expr(num_factored)} / {self.format_expr(den_factored)}`\n\n"
             
             # Сокращение
             simplified = cancel(expr)
             if simplified != expr:
-                result += "**📝 Шаг 3: Сокращение дроби**\n"
-                result += f"После сокращения: `{self.format_expression(simplified)}`\n\n"
+                result += "**📝 После сокращения:**\n"
+                result += f"`{self.format_expr(simplified)}`\n\n"
             
             # Область определения
             if den.has(self.x):
-                domain_solutions = solve(den, self.x)
-                if domain_solutions:
-                    result += "**📝 Шаг 4: Область определения**\n"
-                    result += "Знаменатель ≠ 0:\n"
-                    for sol in domain_solutions:
-                        result += f"`x ≠ {self.format_expression(sol)}`\n"
+                solutions = solve(den, self.x)
+                if solutions:
+                    result += "**📝 Область определения:**\n"
+                    for sol in solutions:
+                        result += f"`x ≠ {self.format_expr(sol)}`\n"
                     result += "\n"
             
-            # Финальный ответ
-            result += "**✅ ОТВЕТ:**\n"
-            result += f"`{self.format_expression(simplified)}`\n"
-            
-            if simplified.is_number:
-                result += f"\n**🔢 Численное значение:** `{float(simplified)}`"
+            result += "**✅ Ответ:**\n"
+            result += f"`{self.format_expr(simplified)}`"
             
             return result
             
-        except Exception as e:
-            return f"❌ Ошибка при решении дроби: {str(e)}"
-    
-    def solve_polynomial(self, expr, original_str):
-        """Решение многочленов"""
-        result = ""
-        
-        try:
-            simplified = simplify(expr)
-            result += "**📝 Шаг 1: Упрощение**\n"
-            result += f"`{self.format_expression(simplified)}`\n\n"
-            
-            # Разложение на множители
-            factored = factor(simplified)
-            if factored != simplified:
-                result += "**📝 Шаг 2: Разложение на множители**\n"
-                result += f"`{self.format_expression(factored)}`\n\n"
-            
-            result += "**✅ ОТВЕТ:**\n"
-            result += f"`{self.format_expression(simplified)}`\n"
-            
-            return result
-            
-        except Exception as e:
-            return f"❌ Ошибка при решении многочлена: {str(e)}"
+        except Exception:
+            return "❌ *Пример не понятный*"
     
     def solve_equation(self, expr_str):
         """Решение уравнений"""
         try:
-            # Упрощенный парсинг уравнений
-            if '=' in expr_str:
-                if 'solve' in expr_str.lower():
-                    # Убираем solve и обрабатываем
-                    eq_part = expr_str.lower().replace('solve', '').strip('() ')
-                    if '=' in eq_part:
-                        left, right = eq_part.split('=', 1)
-                        equation = sympify(left.strip()) - sympify(right.strip())
+            # Извлекаем уравнение
+            if 'solve(' in expr_str:
+                match = re.search(r'solve\((.*),\s*(\w+)\)', expr_str)
+                if match:
+                    eq_part = match.group(1).strip()
+                    var_str = match.group(2).strip()
+                    var = symbols(var_str)
+                    
+                    if '==' in eq_part:
+                        left, right = eq_part.split('==', 1)
+                        equation = sympify(left) - sympify(right)
                     else:
                         equation = sympify(eq_part)
                 else:
-                    # Простое уравнение
+                    return "❌ *Пример не понятный*"
+            else:
+                # Простое уравнение
+                if '=' in expr_str:
                     left, right = expr_str.split('=', 1)
                     equation = sympify(left.strip()) - sympify(right.strip())
-            else:
-                equation = sympify(expr_str)
+                    var = self.x
+                else:
+                    return "❌ *Пример не понятный*"
             
-            result = "**📝 Шаг 1: Записываем уравнение**\n"
-            result += f"`{self.format_expression(equation)} = 0`\n\n"
+            solutions = solve(equation, var)
             
-            # Решаем уравнение
-            solutions = solve(equation, self.x)
-            
-            if solutions:
-                result += "**📝 Шаг 2: Находим решения**\n"
-                for i, sol in enumerate(solutions, 1):
-                    result += f"`x_{i} = {self.format_expression(sol)}`\n"
-                result += "\n"
-            else:
-                result += "**❌ Уравнение не имеет решений**\n\n"
-            
-            result += "**✅ РЕШЕНИЯ:**\n"
+            result = "**📝 Решения уравнения:**\n"
             if solutions:
                 for i, sol in enumerate(solutions, 1):
-                    result += f"`x_{i} = {self.format_expression(sol)}`\n"
+                    result += f"`{var}_{i} = {self.format_expr(sol)}`\n"
             else:
                 result += "Решений нет"
             
             return result
             
-        except Exception as e:
-            return f"❌ Ошибка при решении уравнения: {str(e)}"
+        except Exception:
+            return "❌ *Пример не понятный*"
     
-    def solve_numeric(self, expr, original_str):
-        """Решение числовых выражений"""
+    def solve_polynomial(self, expr, expr_str):
+        """Решение многочленов"""
         try:
-            result = "**📝 Шаг 1: Вычисление**\n"
-            result += f"`{self.format_expression(original_str)}`\n\n"
+            simplified = simplify(expr)
+            result = "**📝 Упрощение:**\n"
+            result += f"`{self.format_expr(simplified)}`\n\n"
             
-            value = float(expr)
+            # Разложение на множители
+            factored = factor(simplified)
+            if factored != simplified:
+                result += "**📝 Разложение на множители:**\n"
+                result += f"`{self.format_expr(factored)}`\n\n"
             
-            result += "**✅ ОТВЕТ:**\n"
-            result += f"`{value}`\n"
+            # Корни для полиномов
+            if simplified.is_polynomial() and simplified.has(self.x):
+                roots = solve(simplified, self.x)
+                if roots:
+                    result += "**📝 Корни:**\n"
+                    for i, root in enumerate(roots, 1):
+                        result += f"`x_{i} = {self.format_expr(root)}`\n"
+                    result += "\n"
+            
+            result += "**✅ Ответ:**\n"
+            result += f"`{self.format_expr(simplified)}`"
             
             return result
             
-        except Exception as e:
-            return f"❌ Ошибка при вычислении: {str(e)}"
+        except Exception:
+            return "❌ *Пример не понятный*"
     
-    def solve_general(self, expr, original_str):
+    def solve_numeric(self, expr, expr_str):
+        """Решение числовых выражений"""
+        try:
+            value = float(expr)
+            result = "**✅ Ответ:**\n"
+            result += f"`{value}`"
+            
+            if value != int(value):
+                result += f"\n\n**📝 Дробь:** `{expr}`"
+            
+            return result
+            
+        except Exception:
+            return "❌ *Пример не понятный*"
+    
+    def solve_derivative(self, expr_str):
+        """Решение производных"""
+        try:
+            if 'diff(' in expr_str:
+                match = re.search(r'diff\((.*),\s*(\w+)\)', expr_str)
+                if match:
+                    func_str = match.group(1).strip()
+                    var_str = match.group(2).strip()
+                    func = sympify(func_str)
+                    var = symbols(var_str)
+                else:
+                    return "❌ *Пример не понятный*"
+            else:
+                return "❌ *Пример не понятный*"
+            
+            derivative = diff(func, var)
+            simplified = simplify(derivative)
+            
+            result = "**✅ Производная:**\n"
+            result += f"`{self.format_expr(simplified)}`"
+            
+            return result
+            
+        except Exception:
+            return "❌ *Пример не понятный*"
+    
+    def solve_integral(self, expr_str):
+        """Решение интегралов"""
+        try:
+            if 'integrate(' in expr_str:
+                match = re.search(r'integrate\((.*),\s*(\w+)\)', expr_str)
+                if match:
+                    func_str = match.group(1).strip()
+                    var_str = match.group(2).strip()
+                    func = sympify(func_str)
+                    var = symbols(var_str)
+                else:
+                    return "❌ *Пример не понятный*"
+            else:
+                return "❌ *Пример не понятный*"
+            
+            integral = integrate(func, var)
+            simplified = simplify(integral)
+            
+            result = "**✅ Интеграл:**\n"
+            result += f"`{self.format_expr(simplified)} + C`"
+            
+            return result
+            
+        except Exception:
+            return "❌ *Пример не понятный*"
+    
+    def solve_general(self, expr, expr_str):
         """Решение общих выражений"""
         try:
             simplified = simplify(expr)
             
-            result = "**📝 Шаг 1: Упрощение**\n"
-            result += f"Исходное: `{self.format_expression(original_str)}`\n"
-            result += f"Упрощенное: `{self.format_expression(simplified)}`\n\n"
-            
-            result += "**✅ ОТВЕТ:**\n"
-            result += f"`{self.format_expression(simplified)}`\n"
+            result = "**✅ Ответ:**\n"
+            result += f"`{self.format_expr(simplified)}`"
             
             if simplified.is_number:
-                result += f"\n**🔢 Численное значение:** `{float(simplified)}`"
+                result += f"\n\n**📝 Число:** `{float(simplified)}`"
             
             return result
             
-        except Exception as e:
-            return f"❌ Ошибка при упрощении: {str(e)}"
+        except Exception:
+            return "❌ *Пример не понятный*"
 
-# Глобальный экземпляр решателя
 solver = SmartMathSolver()
 
-def recognize_text_from_image_safe(image_path: str) -> str:
-    """Безопасное распознавание текста с обработкой ошибок"""
+def recognize_text_safe(image_path):
+    """Безопасное распознавание текста"""
     if not TESSERACT_AVAILABLE:
-        return "Функция распознавания фото временно недоступна"
+        return "OCR недоступен"
     
     try:
         image = Image.open(image_path)
-        image = image.convert('L')  # Grayscale
-        
-        # Простая конфигурация
+        image = image.convert('L')
         text = pytesseract.image_to_string(image)
         text = text.strip()
         
         if not text:
-            return "Не удалось распознать текст на изображении"
+            return "Текст не распознан"
         
-        # Базовая очистка
-        replacements = {
-            'х': 'x', 'у': 'y', 'з': 'z', 
-            '—': '-', '–': '-', '×': '*',
-            '÷': '/'
-        }
-        
+        # Простые замены
+        replacements = {'х': 'x', 'у': 'y', '—': '-', '×': '*', '÷': '/'}
         for old, new in replacements.items():
             text = text.replace(old, new)
             
         return text
         
-    except Exception as e:
-        return f"Ошибка при обработке изображения: {str(e)}"
+    except Exception:
+        return "Ошибка распознавания"
 
 async def start(update: Update, context: CallbackContext):
     user = update.effective_user
-    welcome_text = f"""
+    text = f"""
 👋 Привет, {user.first_name}!
 
-Я - умный математический бот! 🧮
+Я умный математический бот! 🧠
 
-🎯 **Я умею решать:**
-• Алгебраические дроби
-• Уравнения 
-• Многочлены
-• Числовые выражения
+Просто напиши пример и я решу его:
 
-📝 **Просто отправь мне пример текстом!**
+• `(x^2 - 4)/(x - 2)` - дроби
+• `x^2 - 5x + 6 = 0` - уравнения  
+• `2 + 3 * 4^2` - числовые
+• `diff(x^2, x)` - производные
+• `integrate(x^2, x)` - интегралы
 
-{ "📸 **Или сфотографируй пример!**" if TESSERACT_AVAILABLE else "⚠️ **Распознавание фото временно недоступно**" }
+Я сам пойму что ты хочешь! ✨
     """
     
     keyboard = [
         [InlineKeyboardButton("🧮 Примеры", callback_data="examples")],
-        [InlineKeyboardButton("📝 Как писать примеры", callback_data="syntax_help")]
+        [InlineKeyboardButton("📝 Синтаксис", callback_data="syntax")]
     ]
     if TESSERACT_AVAILABLE:
-        keyboard.append([InlineKeyboardButton("📸 Отправить фото", callback_data="photo_help")])
+        keyboard.append([InlineKeyboardButton("📸 Фото", callback_data="photo_help")])
     
-    reply_markup = InlineKeyboardMarkup(keyboard)
-    
-    await update.message.reply_text(welcome_text, reply_markup=reply_markup)
+    await update.message.reply_text(text, reply_markup=InlineKeyboardMarkup(keyboard))
 
 async def handle_text(update: Update, context: CallbackContext):
-    """Обработка текстовых сообщений"""
     user_input = update.message.text.strip()
-    
     await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="typing")
     
-    result_text = solver.solve_expression(user_input)
+    result = solver.solve_expression(user_input)
     
-    keyboard = [
-        [InlineKeyboardButton("🧮 Новый пример", callback_data="new_example")],
-        [InlineKeyboardButton("📚 Другие примеры", callback_data="examples")]
-    ]
-    reply_markup = InlineKeyboardMarkup(keyboard)
-    
-    await update.message.reply_text(result_text, reply_markup=reply_markup, parse_mode='Markdown')
+    keyboard = [[InlineKeyboardButton("🧮 Новый пример", callback_data="new")]]
+    await update.message.reply_text(result, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='Markdown')
 
 async def handle_photo(update: Update, context: CallbackContext):
-    """Обработка фотографий"""
     if not TESSERACT_AVAILABLE:
-        await update.message.reply_text(
-            "❌ Распознавание фото временно недоступно.\n\n"
-            "Пожалуйста, отправьте пример текстом:\n"
-            "`(x^2 - 4)/(x - 2)`\n"
-            "`2 + 3 * 4`\n"
-            "`solve(x^2 - 9 = 0, x)`"
-        )
+        await update.message.reply_text("📸 Фото временно не работают")
         return
     
     try:
         await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="typing")
         
-        photo_file = await update.message.photo[-1].get_file()
+        photo = await update.message.photo[-1].get_file()
+        with tempfile.NamedTemporaryFile(delete=False, suffix='.jpg') as f:
+            temp_path = f.name
         
-        with tempfile.NamedTemporaryFile(delete=False, suffix='.jpg') as temp_file:
-            temp_path = temp_file.name
-        
-        await photo_file.download_to_drive(temp_path)
-        
-        recognized_text = recognize_text_from_image_safe(temp_path)
-        
+        await photo.download_to_drive(temp_path)
+        text = recognize_text_safe(temp_path)
         os.unlink(temp_path)
         
-        # Проверяем, удалось ли распознать математическое выражение
-        if any(word in recognized_text.lower() for word in ['ошибка', 'не удалось', 'unable']):
-            await update.message.reply_text(
-                f"❌ {recognized_text}\n\n"
-                "📸 **Советы для лучшего распознавания:**\n"
-                "• Четкий печатный текст\n"
-                "• Хорошее освещение\n"
-                "• Пример в одну строку\n"
-                "• Контрастные цвета"
-            )
+        if "не распознан" in text or "ошибка" in text:
+            await update.message.reply_text("❌ Не вижу пример на фото")
             return
         
-        await update.message.reply_text(f"📸 **Распознано:** `{recognized_text}`")
+        await update.message.reply_text(f"📸 Вижу: `{text}`")
+        result = solver.solve_expression(text)
         
-        # Решаем распознанный пример
-        result_text = solver.solve_expression(recognized_text)
+        keyboard = [[InlineKeyboardButton("📸 Еще фото", callback_data="photo_help")]]
+        await update.message.reply_text(result, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='Markdown')
         
-        keyboard = [
-            [InlineKeyboardButton("📸 Еще фото", callback_data="photo_help")],
-            [InlineKeyboardButton("🧮 Текстовый пример", callback_data="new_example")]
-        ]
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        
-        await update.message.reply_text(result_text, reply_markup=reply_markup, parse_mode='Markdown')
-        
-    except Exception as e:
-        await update.message.reply_text(
-            f"❌ Ошибка при обработке фото\n\n"
-            f"Попробуйте отправить пример текстом:\n"
-            f"`(x^2 - 4)/(x - 2)`"
-        )
+    except Exception:
+        await update.message.reply_text("❌ Ошибка с фото")
 
 async def button_handler(update: Update, context: CallbackContext):
     query = update.callback_query
     await query.answer()
     
     if query.data == "examples":
-        examples_text = """
-🧮 **Примеры для тестирования:**
+        text = """
+🧮 **Примеры:**
 
 **Дроби:**
 `(x^2 - 4)/(x - 2)`
-`(x^3 - 8)/(x^2 - 4)`
 `1/(x+1) + 2/(x-1)`
 
 **Уравнения:**
-`solve(x^2 - 5x + 6 = 0, x)`
-`x^2 - 9 = 0`
+`x^2 - 5x + 6 = 0`
+`solve(x^2 - 9 = 0, x)`
 
 **Числовые:**
 `2 + 3 * 4^2`
-`(15 - 3) / 4 + 2^3`
+`(15 - 3) / 4`
 
-**Многочлены:**
-`x^2 + 2x + 1`
-`x^3 - 3x^2 + 3x - 1`
+**Производные:**
+`diff(x^3, x)`
+
+**Интегралы:**
+`integrate(x^2, x)`
         """
-        await query.edit_message_text(examples_text, parse_mode='Markdown')
-        
-    elif query.data == "syntax_help":
-        help_text = """
-📝 **Как писать примеры:**
+        await query.edit_message_text(text, parse_mode='Markdown')
+    
+    elif query.data == "syntax":
+        text = """
+📝 **Как писать:**
 
-**Степени:**
-x² → x^2 или x**2
-
-**Дроби:**
-(a + b)/(c + d)
-
-**Уравнения:**
-solve(x^2 - 4 = 0, x)
-или просто
-x^2 - 4 = 0
-
-**Умножение:**
-2 * x или 2⋅x
-
-**Корни:**
-√4 → sqrt(4)
+• Степень: `x^2` или `x**2`
+• Умножение: `2*x` или `2⋅x`  
+• Дроби: `(a+b)/(c+d)`
+• Уравнения: `x^2 - 4 = 0`
+• Производные: `diff(x^2, x)`
+• Интегралы: `integrate(x^2, x)`
         """
-        await query.edit_message_text(help_text, parse_mode='Markdown')
-        
-    elif query.data == "photo_help" and TESSERACT_AVAILABLE:
-        help_text = """
-📸 **Как отправить фото:**
+        await query.edit_message_text(text, parse_mode='Markdown')
+    
+    elif query.data == "photo_help":
+        text = """
+📸 **Фото:**
 
-1. Напишите пример на бумаге
-2. Сфотографируйте при хорошем свете
-3. Отправьте фото боту
-
-✅ **Хорошо распознается:**
-• Печатные буквы и цифры
-• Примеры в одну строку
-• Стандартные математические символы
-
-❌ **Плохо распознается:**
-• Курсивный почерк
-• Сложные дроби в несколько этажей
-• Специальные символы
+• Четкий текст
+• Хороший свет
+• Одна строка
+• Печатные буквы
         """
-        await query.edit_message_text(help_text, parse_mode='Markdown')
-        
-    elif query.data == "new_example":
-        await query.edit_message_text("✍️ Введите математический пример:")
+        await query.edit_message_text(text, parse_mode='Markdown')
+    
+    elif query.data == "new":
+        await query.edit_message_text("✍️ Напиши пример:")
 
-async def handle_any_message(update: Update, context: CallbackContext):
+async def handle_any(update: Update, context: CallbackContext):
     if update.message and not (update.message.text or update.message.photo):
-        await update.message.reply_text(
-            "📝 Отправьте мне математический пример!\n\n"
-            "• **Текстом** - напишите пример\n"
-            f"{'• **Фото** - сфотографируйте пример' if TESSERACT_AVAILABLE else '• ⚠️ Фото - временно недоступно'}\n\n"
-            "Например: `(x^2 - 4)/(x - 2)`"
-        )
+        await update.message.reply_text("Напиши математический пример ✍️")
 
 def main():
-    application = Application.builder().token(BOT_TOKEN).build()
+    app = Application.builder().token(BOT_TOKEN).build()
     
-    application.add_handler(CommandHandler("start", start))
-    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
-    application.add_handler(MessageHandler(filters.PHOTO, handle_photo))
-    application.add_handler(CallbackQueryHandler(button_handler))
-    application.add_handler(MessageHandler(filters.ALL, handle_any_message))
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
+    app.add_handler(MessageHandler(filters.PHOTO, handle_photo))
+    app.add_handler(CallbackQueryHandler(button_handler))
+    app.add_handler(MessageHandler(filters.ALL, handle_any))
     
-    logger.info("🤖 Бот запущен!")
-    if not TESSERACT_AVAILABLE:
-        logger.warning("Tesseract OCR недоступен - распознавание фото отключено")
-    
-    application.run_polling()
+    logger.info("Бот запущен!")
+    app.run_polling()
 
 if __name__ == '__main__':
     main()
