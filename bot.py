@@ -1,14 +1,13 @@
 import os
 import logging
 import re
-from typing import Dict, Tuple
+from typing import Dict
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, CallbackContext, CallbackQueryHandler
 import sympy as sp
 from sympy import (
     sympify, factor, cancel, apart, expand, simplify, solve, diff, integrate, 
-    symbols, fraction, Poly, series, limit, oo, pi, E, sin, cos, tan, log, ln,
-    sqrt, exp, trigsimp, expand_trig, nsimplify, latex, Rational
+    symbols, fraction, Poly, pi, E, sin, cos, tan, log, ln, sqrt, exp, trigsimp
 )
 
 try:
@@ -28,49 +27,36 @@ if not BOT_TOKEN:
 
 class UltraMathSolver:
     def __init__(self):
-        self.x, self.y, self.z, self.t = symbols('x y z t')
-        self.a, self.b, self.c, self.n = symbols('a b c n')
+        self.x, self.y, self.z = symbols('x y z')
+        self.a, self.b, self.c = symbols('a b c')
         self.symbols_dict = {
-            'x': self.x, 'y': self.y, 'z': self.z, 't': self.t,
-            'a': self.a, 'b': self.b, 'c': self.c, 'n': self.n
+            'x': self.x, 'y': self.y, 'z': self.z,
+            'a': self.a, 'b': self.b, 'c': self.c
         }
     
     def ultra_preprocess(self, expr_str: str) -> str:
-        """Максимально умная предобработка"""
+        """Умная предобработка выражений"""
         if not expr_str or len(expr_str.strip()) < 1:
             return ""
             
-        original = expr_str
         expr_str = expr_str.strip()
         
         # Математические символы
         math_symbols = {
             '^': '**', '=': '==', '÷': '/', '×': '*', '–': '-', '−': '-',
             'π': 'pi', '∞': 'oo', '√': 'sqrt', '∫': 'integrate',
-            '∂': 'diff', '∑': 'Sum', '∏': 'Product', 'α': 'alpha',
-            'β': 'beta', 'γ': 'gamma', 'θ': 'theta', 'φ': 'phi',
-            '≈': '~', '≠': '!=', '≤': '<=', '≥': '>=', '±': '+/-',
-            ':': '/', '÷': '/', '\\frac': '', '⇒': '=>', '→': '->'
+            '∂': 'diff', '∑': 'Sum', '∏': 'Product',
+            ':': '/', '÷': '/', '⇒': '=>', '→': '->'
         }
         
         for old, new in math_symbols.items():
             expr_str = expr_str.replace(old, new)
         
         # Умное умножение
-        expr_str = re.sub(r'(\d)([a-zA-Zα-ω])', r'\1*\2', expr_str)
-        expr_str = re.sub(r'([a-zA-Zα-ω])\(', r'\1*(', expr_str)
+        expr_str = re.sub(r'(\d)([a-zA-Z])', r'\1*\2', expr_str)
+        expr_str = re.sub(r'([a-zA-Z])\(', r'\1*(', expr_str)
         expr_str = re.sub(r'\)\s*\(', ')*(', expr_str)
         expr_str = re.sub(r'(\d)(sin|cos|tan|log|ln|sqrt)', r'\1*\2', expr_str)
-        
-        # Исправление ошибок
-        common_errors = {
-            'sinx': 'sin(x)', 'cosx': 'cos(x)', 'tanx': 'tan(x)',
-            'logx': 'log(x)', 'lnx': 'ln(x)', 'sqrtx': 'sqrt(x)',
-            'arcsin': 'asin', 'arccos': 'acos', 'arctan': 'atan',
-        }
-        
-        for wrong, correct in common_errors.items():
-            expr_str = re.sub(r'\b' + wrong + r'\b', correct, expr_str)
         
         return expr_str
     
@@ -79,10 +65,7 @@ class UltraMathSolver:
         num_str = str(numerator)
         den_str = str(denominator)
         
-        # Определяем максимальную длину для выравнивания
         max_len = max(len(num_str), len(den_str))
-        
-        # Центрируем числитель и знаменатель
         num_centered = num_str.center(max_len)
         den_centered = den_str.center(max_len)
         
@@ -102,84 +85,68 @@ class UltraMathSolver:
             'sqrt': '√',
             'pi': 'π',
             'oo': '∞',
-            'exp': 'e^',
-            'I': 'i',
-            'E': 'e'
         }
         
         for old, new in replacements.items():
             expr_str = expr_str.replace(old, new)
         
-        # Форматирование дробей
-        if '/' in expr_str and expr_str.count('/') == 1:
-            parts = expr_str.split('/')
-            if len(parts) == 2:
-                try:
-                    num = sympify(parts[0])
-                    den = sympify(parts[1])
-                    if den != 1:
-                        return self.format_fraction(num, den)
-                except:
-                    pass
-        
         return expr_str
     
     def ultra_solve(self, expr_str: str) -> str:
-    """Максимально умное решение"""
-    try:
-        # Предобработка
-        processed_expr = self.ultra_preprocess(expr_str)
-        if not processed_expr:
-            return "❌ Не вижу математического выражения"
-        
-        # Парсинг
+        """Максимально умное решение"""
         try:
-            sympy_expr = sympify(processed_expr, locals=self.symbols_dict)
-        except Exception as e:
-            # Альтернативные попытки
+            # Предобработка
+            processed_expr = self.ultra_preprocess(expr_str)
+            if not processed_expr:
+                return "❌ Не вижу математического выражения"
+            
+            # Парсинг
             try:
-                alt_expr = processed_expr.replace('==', '-').replace('=', '-')
-                sympy_expr = sympify(alt_expr, locals=self.symbols_dict)
-            except:
+                sympy_expr = sympify(processed_expr, locals=self.symbols_dict)
+            except Exception:
                 try:
-                    sympy_expr = sympify(processed_expr.split('=')[0] if '=' in processed_expr else processed_expr, 
-                                       locals=self.symbols_dict)
+                    alt_expr = processed_expr.replace('==', '-').replace('=', '-')
+                    sympy_expr = sympify(alt_expr, locals=self.symbols_dict)
                 except:
-                    return "🎯 *Анализ примера*\n\n❌ Не могу разобрать математическое выражение\n\n💡 *Проверь:*\n• Синтаксис\n• Используй * для умножения\n• Правильность скобок"
-        
-        # УЛУЧШЕННОЕ определение типа
-        result = self.build_beautiful_header(expr_str)
-        
-        # 1. Сначала проверяем специальные случаи
-        if 'solve' in expr_str.lower():
-            solution = self.solve_equation_beautiful(sympy_expr, expr_str)
-        elif 'diff' in expr_str.lower():
-            solution = self.solve_derivative_beautiful(sympy_expr, expr_str)
-        elif 'integrate' in expr_str.lower():
-            solution = self.solve_integral_beautiful(sympy_expr, expr_str)
-        elif '=' in expr_str:
-            solution = self.solve_equation_beautiful(sympy_expr, expr_str)
-        
-        # 2. Проверяем является ли выражение дробью (имеет знаменатель отличный от 1)
-        elif sympy_expr.is_rational_function():
-            numerator, denominator = fraction(sympy_expr)
-            if denominator != 1:  # Это настоящая дробь
-                solution = self.solve_rational_beautiful(sympy_expr, expr_str)
-            else:  # Это многочлен в форме дроби
-                solution = self.solve_polynomial_beautiful(sympy_expr, expr_str)
-        
-        # 3. Числовые выражения
-        elif sympy_expr.is_number:
-            solution = self.solve_numeric_beautiful(sympy_expr, expr_str)
-        
-        # 4. Все остальное - общие выражения
-        else:
-            solution = self.solve_general_beautiful(sympy_expr, expr_str)
-        
-        return result + solution
-        
-    except Exception:
-        return "🎯 *Анализ примера*\n\n❌ Не могу решить этот пример\n\n💡 *Рекомендации:*\n• Проверь синтаксис\n• Используй * для умножения\n• Упрости выражение" выражение"
+                    try:
+                        sympy_expr = sympify(processed_expr.split('=')[0] if '=' in processed_expr else processed_expr, 
+                                           locals=self.symbols_dict)
+                    except:
+                        return "❌ Не могу разобрать математическое выражение"
+            
+            # Улучшенное определение типа
+            result = self.build_beautiful_header(expr_str)
+            
+            # 1. Сначала проверяем специальные случаи
+            if 'solve' in expr_str.lower():
+                solution = self.solve_equation_beautiful(sympy_expr, expr_str)
+            elif 'diff' in expr_str.lower():
+                solution = self.solve_derivative_beautiful(sympy_expr, expr_str)
+            elif 'integrate' in expr_str.lower():
+                solution = self.solve_integral_beautiful(sympy_expr, expr_str)
+            elif '=' in expr_str:
+                solution = self.solve_equation_beautiful(sympy_expr, expr_str)
+            
+            # 2. Проверяем является ли выражение дробью
+            elif sympy_expr.is_rational_function():
+                numerator, denominator = fraction(sympy_expr)
+                if denominator != 1:  # Это настоящая дробь
+                    solution = self.solve_rational_beautiful(sympy_expr, expr_str)
+                else:  # Это многочлен
+                    solution = self.solve_polynomial_beautiful(sympy_expr, expr_str)
+            
+            # 3. Числовые выражения
+            elif sympy_expr.is_number:
+                solution = self.solve_numeric_beautiful(sympy_expr, expr_str)
+            
+            # 4. Все остальное - общие выражения
+            else:
+                solution = self.solve_general_beautiful(sympy_expr, expr_str)
+            
+            return result + solution
+            
+        except Exception:
+            return "❌ Не могу решить этот пример"
     
     def build_beautiful_header(self, original: str) -> str:
         """Красивый заголовок"""
@@ -191,10 +158,8 @@ class UltraMathSolver:
     def solve_rational_beautiful(self, expr, original: str) -> str:
         """Красивое решение дробей"""
         try:
-            result = ""
+            result = "🧮 *Алгебраическая дробь*\n\n"
             numerator, denominator = fraction(expr)
-            
-            result += "🧮 *Алгебраическая дробь*\n\n"
             
             # Разложение на множители
             factored_num = factor(numerator)
@@ -209,15 +174,12 @@ class UltraMathSolver:
             if simplified != expr:
                 result += "✨ *После сокращения:*\n"
                 
-                # Красивое отображение дроби если возможно
-                if simplified.is_rational_function():
-                    simp_num, simp_den = fraction(simplified)
-                    if simp_den != 1:
-                        result += f"```\n{self.format_fraction(simp_num, simp_den)}\n```\n\n"
-                    else:
-                        result += f"`{self.format_expression(simp_num)}`\n\n"
+                # Красивое отображение дроби
+                simp_num, simp_den = fraction(simplified)
+                if simp_den != 1:
+                    result += f"```\n{self.format_fraction(simp_num, simp_den)}\n```\n\n"
                 else:
-                    result += f"`{self.format_expression(simplified)}`\n\n"
+                    result += f"`{self.format_expression(simp_num)}`\n\n"
             
             # Область определения
             if denominator.has(self.x):
@@ -231,55 +193,47 @@ class UltraMathSolver:
             result += "✅ *Финальный ответ:*\n"
             
             # Красивое отображение финального ответа
-            if simplified.is_rational_function():
-                final_num, final_den = fraction(simplified)
-                if final_den != 1:
-                    result += f"```\n{self.format_fraction(final_num, final_den)}\n```"
-                else:
-                    result += f"`{self.format_expression(final_num)}`"
+            final_num, final_den = fraction(simplified)
+            if final_den != 1:
+                result += f"```\n{self.format_fraction(final_num, final_den)}\n```"
             else:
-                result += f"`{self.format_expression(simplified)}`"
-            
-            # Численное значение
-            if simplified.is_number:
-                decimal_val = float(simplified)
-                result += f"\n\n🔢 *Десятичная форма:* `{decimal_val:.6f}`"
+                result += f"`{self.format_expression(final_num)}`"
             
             return result
             
         except Exception:
             return "❌ Не удалось решить дробное выражение"
-
+    
     def solve_polynomial_beautiful(self, expr, original: str) -> str:
-    """Красивое решение многочленов"""
-    try:
-        result = "📐 *Многочлен*\n\n"
-        
-        # Упрощение
-        simplified = simplify(expr)
-        result += f"✨ *Упрощенная форма:*\n`{self.format_expression(simplified)}`\n\n"
-        
-        # Разложение на множители
+        """Красивое решение многочленов"""
         try:
-            factored = factor(simplified)
-            if factored != simplified:
-                result += "📊 *Разложение на множители:*\n"
-                result += f"`{self.format_expression(factored)}`\n\n"
-        except:
-            pass
-        
-        # Нахождение корней
-        if simplified.is_polynomial() and simplified.has(self.x):
-            roots = solve(simplified, self.x)
-            if roots:
-                result += "🎯 *Корни многочлена:*\n"
-                for i, root in enumerate(roots, 1):
-                    result += f"`x₍{i}₎ = {self.format_expression(root)}`\n"
-        
-        return result
-        
-    except Exception:
-        return "❌ Не удалось упростить многочлен"
+            result = "📐 *Многочлен*\n\n"
+            
+            # Упрощение
+            simplified = simplify(expr)
+            result += f"✨ *Упрощенная форма:*\n`{self.format_expression(simplified)}`\n\n"
+            
+            # Разложение на множители
+            try:
+                factored = factor(simplified)
+                if factored != simplified:
+                    result += "📊 *Разложение на множители:*\n"
+                    result += f"`{self.format_expression(factored)}`\n\n"
+            except:
+                pass
+            
+            # Нахождение корней
+            if simplified.is_polynomial() and simplified.has(self.x):
+                roots = solve(simplified, self.x)
+                if roots:
+                    result += "🎯 *Корни многочлена:*\n"
+                    for i, root in enumerate(roots, 1):
+                        result += f"`x₍{i}₎ = {self.format_expression(root)}`\n"
+            
+            return result
+            
+        except Exception:
+            return "❌ Не удалось упростить многочлен"
     
     def solve_equation_beautiful(self, expr, original: str) -> str:
         """Красивое решение уравнений"""
@@ -293,12 +247,7 @@ class UltraMathSolver:
                     eq_part = self.ultra_preprocess(match.group(1))
                     var_str = match.group(2)
                     var = symbols(var_str)
-                    
-                    if '==' in eq_part:
-                        left, right = eq_part.split('==', 1)
-                        equation = sympify(left) - sympify(right)
-                    else:
-                        equation = sympify(eq_part)
+                    equation = sympify(eq_part, locals=self.symbols_dict)
                 else:
                     equation = expr
                     var = self.x
@@ -315,11 +264,6 @@ class UltraMathSolver:
                 result += "✨ *Найденные решения:*\n"
                 for i, sol in enumerate(solutions, 1):
                     result += f"`{var}₍{i}₎ = {self.format_expression(sol)}`\n"
-                
-                result += "\n🔍 *Проверка решений:*\n"
-                for sol in solutions:
-                    check_val = equation.subs(var, sol)
-                    result += f"`{var} = {self.format_expression(sol)}` → `{self.format_expression(check_val)} ≈ 0` ✅\n"
             else:
                 result += "❌ Уравнение не имеет действительных решений"
             
@@ -338,7 +282,7 @@ class UltraMathSolver:
             result += f"✅ *Точный ответ:*\n"
             
             # Красивое отображение дроби если это дробь
-            if exact.is_rational and exact != int(exact):
+            if hasattr(exact, 'is_rational') and exact.is_rational and exact != int(exact):
                 num, den = fraction(exact)
                 result += f"```\n{self.format_fraction(num, den)}\n```\n\n"
             else:
@@ -347,15 +291,9 @@ class UltraMathSolver:
             result += "📊 *Дополнительные формы:*\n"
             result += f"• Десятичная: `{numeric}`\n"
             
-            if numeric != int(numeric) and not exact.is_rational:
+            if numeric != int(numeric):
                 result += f"• Дробь: `{exact}`\n"
                 
-            if abs(numeric) > 1000 or (0 < abs(numeric) < 0.001 and numeric != 0):
-                result += f"• Научная запись: `{numeric:.2e}`\n"
-                
-            if numeric < 0:
-                result += f"• Модуль: `{abs(numeric)}`\n"
-            
             return result
             
         except Exception:
@@ -412,22 +350,22 @@ async def start(update: Update, context: CallbackContext):
     
     welcome_text = f"""🎓 *ДОБРО ПОЖАЛОВАТЬ В ULTRA MATH BOT!*
 
-Привет, {user.first_name}! Я — профессиональный математический ассистент с *премиальным форматированием*!
+Привет, {user.first_name}! Я — профессиональный математический ассистент!
 
 ✨ *МОИ ВОЗМОЖНОСТИ:*
 • 🧮 Алгебраические дроби с красивым отображением
 • 🎯 Уравнения с проверкой решений  
 • 📈 Производные и интегралы
-• 📊 Числовые выражения в multiple форматах
-• 💫 Профессиональное математическое форматирование
+• 📊 Числовые выражения
+• 📐 Многочлены и разложение на множители
 
-🚀 *Просто напиши любой пример — я сделаю всё красиво!*"""
+🚀 *Просто напиши любой пример!*"""
 
     keyboard = [
         [InlineKeyboardButton("🧮 Примеры дробей", callback_data="fractions")],
+        [InlineKeyboardButton("📐 Примеры многочленов", callback_data="polynomials")],
         [InlineKeyboardButton("🎯 Примеры уравнений", callback_data="equations")],
-        [InlineKeyboardButton("🔢 Числовые примеры", callback_data="numeric")],
-        [InlineKeyboardButton("🚀 Сложные задачи", callback_data="challenges")]
+        [InlineKeyboardButton("🔢 Числовые примеры", callback_data="numeric")]
     ]
     
     await update.message.reply_text(
@@ -468,10 +406,25 @@ async def handle_callback_query(update: Update, context: CallbackContext):
 `1/(x+1) + 2/(x-1)`
 `(x³ - 8)/(x² - 4)`
 `(2x + 4)/2`
-`49/7`
 `15/4`
 
 ✨ *Бот покажет дроби в красивом формате!*"""
+        
+        await query.edit_message_text(
+            examples_text,
+            parse_mode='Markdown'
+        )
+    
+    elif query.data == "polynomials":
+        examples_text = """📐 *ПРИМЕРЫ МНОГОЧЛЕНОВ:*
+
+`3*x^2 - 12*x + 12`
+`x^2 + 2*x + 1`
+`2*x^3 - 5*x^2 + 3*x`
+`x^2 - 9`
+`x^3 - 27`
+
+✨ *Бот разложит на множители и найдет корни!*"""
         
         await query.edit_message_text(
             examples_text,
@@ -485,9 +438,8 @@ async def handle_callback_query(update: Update, context: CallbackContext):
 `solve(x² - 9 = 0, x)`
 `x³ - 3x + 2 = 0`
 `2x + 5 = 13`
-`solve([x + y - 5, 2x - y - 1], [x, y])`
 
-✨ *Бот найдет все решения и проверит их!*"""
+✨ *Бот найдет все решения!*"""
         
         await query.edit_message_text(
             examples_text,
@@ -502,25 +454,8 @@ async def handle_callback_query(update: Update, context: CallbackContext):
 `(20 - 5) ÷ 3`
 `2³ + 3²`
 `√16 + 4²`
-`π × 2²`
 
 ✨ *Бот покажет ответ в разных форматах!*"""
-        
-        await query.edit_message_text(
-            examples_text,
-            parse_mode='Markdown'
-        )
-    
-    elif query.data == "challenges":
-        examples_text = """🚀 *СЛОЖНЫЕ ЗАДАЧИ:*
-
-`((x² - 1)/(x + 1)) / ((x - 1)/(x² + 2x + 1))`
-`(x⁴ - 16)/(x² + 4) + (x² - 4)/(x + 2)`
-`diff(x³ + 2x² - x, x)`
-`integrate(x² + 3x + 2, x)`
-`sin(x)² + cos(x)² + tan(x)⋅cot(x)`
-
-🎯 *Проверь возможности бота на полную!*"""
         
         await query.edit_message_text(
             examples_text,
@@ -539,9 +474,9 @@ async def handle_callback_query(update: Update, context: CallbackContext):
             "📚 *Выбери тип примеров:*",
             reply_markup=InlineKeyboardMarkup([
                 [InlineKeyboardButton("🧮 Дроби", callback_data="fractions")],
+                [InlineKeyboardButton("📐 Многочлены", callback_data="polynomials")],
                 [InlineKeyboardButton("🎯 Уравнения", callback_data="equations")],
-                [InlineKeyboardButton("🔢 Числовые", callback_data="numeric")],
-                [InlineKeyboardButton("🚀 Сложные", callback_data="challenges")]
+                [InlineKeyboardButton("🔢 Числовые", callback_data="numeric")]
             ]),
             parse_mode='Markdown'
         )
@@ -553,8 +488,8 @@ async def handle_other_messages(update: Update, context: CallbackContext):
             "✨ *Примеры:*\n"
             "`49:7` - деление\n"
             "`(x² - 4)/(x - 2)` - дробь\n"
-            "`x² - 5x + 6 = 0` - уравнение\n"
-            "`diff(x², x)` - производная\n\n"
+            "`3*x^2 - 12*x + 12` - многочлен\n"
+            "`x² - 5x + 6 = 0` - уравнение\n\n"
             "💫 *Я оформлю решение профессионально!*",
             parse_mode='Markdown'
         )
