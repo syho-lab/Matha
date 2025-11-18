@@ -3,8 +3,11 @@ services:
     name: math-telegram-bot
     env: python
     plan: free
-    buildCommand: pip install -r requirements.txt
+    buildCommand: |
+      pip install -r requirements.txt
+      sudo apt-get update
+      sudo apt-get install -y tesseract-ocr tesseract-ocr-rus tesseract-ocr-eng
     startCommand: python bot.py
     envVars:
       - key: BOT_TOKEN
-        value: YOUR_BOT_TOKEN_HERE
+        value: your_bot_token_here
