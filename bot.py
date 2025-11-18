@@ -125,48 +125,61 @@ class UltraMathSolver:
         return expr_str
     
     def ultra_solve(self, expr_str: str) -> str:
-        """Максимально умное решение"""
+    """Максимально умное решение"""
+    try:
+        # Предобработка
+        processed_expr = self.ultra_preprocess(expr_str)
+        if not processed_expr:
+            return "❌ Не вижу математического выражения"
+        
+        # Парсинг
         try:
-            # Предобработка
-            processed_expr = self.ultra_preprocess(expr_str)
-            if not processed_expr:
-                return "❌ Не вижу математического выражения"
-            
-            # Парсинг
+            sympy_expr = sympify(processed_expr, locals=self.symbols_dict)
+        except Exception as e:
+            # Альтернативные попытки
             try:
-                sympy_expr = sympify(processed_expr, locals=self.symbols_dict)
-            except Exception as e:
-                # Альтернативные попытки
+                alt_expr = processed_expr.replace('==', '-').replace('=', '-')
+                sympy_expr = sympify(alt_expr, locals=self.symbols_dict)
+            except:
                 try:
-                    alt_expr = processed_expr.replace('==', '-').replace('=', '-')
-                    sympy_expr = sympify(alt_expr, locals=self.symbols_dict)
+                    sympy_expr = sympify(processed_expr.split('=')[0] if '=' in processed_expr else processed_expr, 
+                                       locals=self.symbols_dict)
                 except:
-                    try:
-                        sympy_expr = sympify(processed_expr.split('=')[0] if '=' in processed_expr else processed_expr, 
-                                           locals=self.symbols_dict)
-                    except:
-                        return "🎯 *Анализ примера*\n\n❌ Не могу разобрать математическое выражение\n\n💡 *Проверь:*\n• Синтаксис\n• Используй * для умножения\n• Правильность скобок"
-            
-            # Определение типа и решение
-            result = self.build_beautiful_header(expr_str)
-            
-            if sympy_expr.is_rational_function():
+                    return "🎯 *Анализ примера*\n\n❌ Не могу разобрать математическое выражение\n\n💡 *Проверь:*\n• Синтаксис\n• Используй * для умножения\n• Правильность скобок"
+        
+        # УЛУЧШЕННОЕ определение типа
+        result = self.build_beautiful_header(expr_str)
+        
+        # 1. Сначала проверяем специальные случаи
+        if 'solve' in expr_str.lower():
+            solution = self.solve_equation_beautiful(sympy_expr, expr_str)
+        elif 'diff' in expr_str.lower():
+            solution = self.solve_derivative_beautiful(sympy_expr, expr_str)
+        elif 'integrate' in expr_str.lower():
+            solution = self.solve_integral_beautiful(sympy_expr, expr_str)
+        elif '=' in expr_str:
+            solution = self.solve_equation_beautiful(sympy_expr, expr_str)
+        
+        # 2. Проверяем является ли выражение дробью (имеет знаменатель отличный от 1)
+        elif sympy_expr.is_rational_function():
+            numerator, denominator = fraction(sympy_expr)
+            if denominator != 1:  # Это настоящая дробь
                 solution = self.solve_rational_beautiful(sympy_expr, expr_str)
-            elif 'solve' in expr_str.lower() or '=' in expr_str:
-                solution = self.solve_equation_beautiful(sympy_expr, expr_str)
-            elif sympy_expr.is_number:
-                solution = self.solve_numeric_beautiful(sympy_expr, expr_str)
-            elif 'diff' in expr_str.lower():
-                solution = self.solve_derivative_beautiful(sympy_expr, expr_str)
-            elif 'integrate' in expr_str.lower():
-                solution = self.solve_integral_beautiful(sympy_expr, expr_str)
-            else:
-                solution = self.solve_general_beautiful(sympy_expr, expr_str)
-            
-            return result + solution
-            
-        except Exception:
-            return "🎯 *Анализ примера*\n\n❌ Не могу решить этот пример\n\n💡 *Рекомендации:*\n• Проверь синтаксис\n• Используй * для умножения\n• Упрости выражение"
+            else:  # Это многочлен в форме дроби
+                solution = self.solve_polynomial_beautiful(sympy_expr, expr_str)
+        
+        # 3. Числовые выражения
+        elif sympy_expr.is_number:
+            solution = self.solve_numeric_beautiful(sympy_expr, expr_str)
+        
+        # 4. Все остальное - общие выражения
+        else:
+            solution = self.solve_general_beautiful(sympy_expr, expr_str)
+        
+        return result + solution
+        
+    except Exception:
+        return "🎯 *Анализ примера*\n\n❌ Не могу решить этот пример\n\n💡 *Рекомендации:*\n• Проверь синтаксис\n• Используй * для умножения\n• Упрости выражение" выражение"
     
     def build_beautiful_header(self, original: str) -> str:
         """Красивый заголовок"""
@@ -236,6 +249,37 @@ class UltraMathSolver:
             
         except Exception:
             return "❌ Не удалось решить дробное выражение"
+
+    def solve_polynomial_beautiful(self, expr, original: str) -> str:
+    """Красивое решение многочленов"""
+    try:
+        result = "📐 *Многочлен*\n\n"
+        
+        # Упрощение
+        simplified = simplify(expr)
+        result += f"✨ *Упрощенная форма:*\n`{self.format_expression(simplified)}`\n\n"
+        
+        # Разложение на множители
+        try:
+            factored = factor(simplified)
+            if factored != simplified:
+                result += "📊 *Разложение на множители:*\n"
+                result += f"`{self.format_expression(factored)}`\n\n"
+        except:
+            pass
+        
+        # Нахождение корней
+        if simplified.is_polynomial() and simplified.has(self.x):
+            roots = solve(simplified, self.x)
+            if roots:
+                result += "🎯 *Корни многочлена:*\n"
+                for i, root in enumerate(roots, 1):
+                    result += f"`x₍{i}₎ = {self.format_expression(root)}`\n"
+        
+        return result
+        
+    except Exception:
+        return "❌ Не удалось упростить многочлен"
     
     def solve_equation_beautiful(self, expr, original: str) -> str:
         """Красивое решение уравнений"""
