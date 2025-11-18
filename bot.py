@@ -1,34 +1,22 @@
 import os
 import logging
-import tempfile
 import re
-import asyncio
-from typing import Dict, List, Tuple
+import requests
+from typing import Dict, List
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, CallbackContext, CallbackQueryHandler
 import sympy as sp
 from sympy import (
     sympify, factor, cancel, apart, expand, simplify, solve, diff, integrate, 
     symbols, fraction, Poly, series, limit, oo, I, pi, E, sin, cos, tan, log, ln,
-    sqrt, exp, trigsimp, expand_trig, nsimplify
+    sqrt, exp, trigsimp, expand_trig, nsimplify, solveset, S, latex
 )
-from PIL import Image, ImageEnhance, ImageFilter
-import pytesseract
-import numpy as np
-
-# ========== КОНФИГУРАЦИЯ ==========
-try:
-    pytesseract.pytesseract.tesseract_cmd = '/usr/bin/tesseract'
-    TESSERACT_AVAILABLE = True
-except:
-    TESSERACT_AVAILABLE = False
 
 try:
     from keep_alive import keep_alive
     keep_alive()
-    logging.info("🔄 Flask сервер запущен для мониторинга")
 except ImportError:
-    logging.warning("Flask недоступен")
+    pass
 
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
@@ -38,482 +26,488 @@ logger = logging.getLogger(__name__)
 
 BOT_TOKEN = os.environ.get('BOT_TOKEN')
 if not BOT_TOKEN:
-    raise ValueError("❌ BOT_TOKEN не установлен")
+    raise ValueError("BOT_TOKEN не установлен")
 
-# ========== МЕГА-КЛАСС РЕШАТЕЛЯ ==========
-class MegaMathSolver:
+class UltraMathSolver:
     def __init__(self):
         self.x, self.y, self.z, self.t = symbols('x y z t')
-        self.a, self.b, self.c, self.n = symbols('a b c n')
+        self.a, self.b, self.c, self.n, self.m = symbols('a b c n m')
         self.symbols_dict = {
             'x': self.x, 'y': self.y, 'z': self.z, 't': self.t,
-            'a': self.a, 'b': self.b, 'c': self.c, 'n': self.n
+            'a': self.a, 'b': self.b, 'c': self.c, 'n': self.n, 'm': self.m
         }
         
-    def intelligent_preprocess(self, expr_str: str) -> str:
-        """Умная предобработка выражений"""
-        if not expr_str or expr_str.isspace():
+        # База знаний сложных примеров
+        self.complex_patterns = {
+            'quadratic': r'(\w+)\*\*2\s*[\+\-]\s*\d+\s*\*\s*\w+\s*[\+\-]\s*\d+',
+            'rational': r'\([^)]+\)\s*/\s*\([^)]+\)',
+            'trigonometric': r'sin|cos|tan|cot|sec|csc',
+            'logarithmic': r'log|ln',
+            'exponential': r'exp|\*\*|\^',
+            'derivative': r'diff|derivative',
+            'integral': r'integrate|∫'
+        }
+    
+    def ultra_preprocess(self, expr_str: str) -> str:
+        """УЛЬТРА-умная предобработка"""
+        if not expr_str or len(expr_str.strip()) < 2:
             return ""
             
-        # Сохраняем оригинал для анализа
         original = expr_str
+        expr_str = expr_str.strip()
         
-        # 1. Заменяем кавычки и специальные символы
-        expr_str = expr_str.replace('"', '').replace("'", "")
-        expr_str = expr_str.replace('’', "'").replace('‘', "'")
-        
-        # 2. Математические символы
-        replacements = {
+        # 1. Умные замены математических символов
+        math_symbols = {
             '^': '**', '=': '==', '÷': '/', '×': '*', '–': '-', '−': '-',
             'π': 'pi', '∞': 'oo', '√': 'sqrt', '∫': 'integrate',
-            '∂': 'diff', '∑': 'Sum', '∏': 'Product', '∆': 'delta',
-            'α': 'alpha', 'β': 'beta', 'γ': 'gamma', 'θ': 'theta'
+            '∂': 'diff', '∑': 'Sum', '∏': 'Product', 'α': 'alpha',
+            'β': 'beta', 'γ': 'gamma', 'θ': 'theta', 'φ': 'phi',
+            '≈': '~', '≠': '!=', '≤': '<=', '≥': '>=', '±': '+/-'
         }
-        for old, new in replacements.items():
+        
+        for old, new in math_symbols.items():
             expr_str = expr_str.replace(old, new)
-            
-        # 3. Умное добавление умножения
-        # Между цифрой и буквой: 3x → 3*x
-        expr_str = re.sub(r'(\d)([a-zA-Zα-ω])', r'\1*\2', expr_str)
-        # Между буквой и скобкой: x( → x*(
-        expr_str = re.sub(r'([a-zA-Zα-ω])\(', r'\1*(', expr_str)
-        # Между скобками: )( → )*(
-        expr_str = re.sub(r'\)\s*\(', ')*(', expr_str)
-        # Между цифрой и функцией: 2sin → 2*sin
+        
+        # 2. Автоматическое добавление умножения
+        expr_str = re.sub(r'(\d)([a-zA-Zα-ω])', r'\1*\2', expr_str)  # 2x → 2*x
+        expr_str = re.sub(r'([a-zA-Zα-ω])\(', r'\1*(', expr_str)     # x( → x*(
+        expr_str = re.sub(r'\)\s*\(', ')*(', expr_str)              # )( → )*(
         expr_str = re.sub(r'(\d)(sin|cos|tan|log|ln|sqrt)', r'\1*\2', expr_str)
         
-        # 4. Исправление распознанных ошибок OCR
-        ocr_corrections = {
-            'х': 'x', 'у': 'y', 'з': 'z', 'с': 'c', 'о': 'o',
-            'а': 'a', 'в': 'b', 'е': 'e', 'к': 'k', 'м': 'm',
-            'н': 'n', 'р': 'p', 'т': 't', 'і': 'i', 'ј': 'j',
-            'ѕ': 's', 'ѡ': 'w', 'ѵ': 'v', 'ѻ': 'o', 'с': 'c'
+        # 3. Исправление частых ошибок пользователей
+        common_errors = {
+            'sinx': 'sin(x)', 'cosx': 'cos(x)', 'tanx': 'tan(x)',
+            'logx': 'log(x)', 'lnx': 'ln(x)', 'sqrtx': 'sqrt(x)',
+            'arcsin': 'asin', 'arccos': 'acos', 'arctan': 'atan',
+            'e^': 'exp', 'e**': 'exp'
         }
-        for wrong, correct in ocr_corrections.items():
-            expr_str = expr_str.replace(wrong, correct)
-            
-        # 5. Удаление лишних пробелов
-        expr_str = re.sub(r'\s+', ' ', expr_str).strip()
+        
+        for wrong, correct in common_errors.items():
+            expr_str = re.sub(r'\b' + wrong + r'\b', correct, expr_str)
+        
+        # 4. Обработка специальных случаев
+        # Дроби вида a/b/c → (a/b)/c
+        expr_str = re.sub(r'(\d+)/(\d+)/(\d+)', r'(\1/\2)/\3', expr_str)
+        
+        # Степени с дробями
+        expr_str = re.sub(r'(\w+)\^\((\d+)/(\d+)\)', r'\1**(\2/\3)', expr_str)
+        
+        # 5. Умная обработка уравнений
+        if '=' in expr_str and 'solve' not in expr_str:
+            parts = expr_str.split('=')
+            if len(parts) == 2:
+                expr_str = f"{parts[0].strip()} - ({parts[1].strip()})"
         
         logger.info(f"🔧 Препроцессинг: '{original}' → '{expr_str}'")
         return expr_str
     
-    def detect_expression_type(self, expr_str: str) -> Dict:
-        """Интеллектуальное определение типа выражения"""
-        expr_clean = expr_str.lower().replace(' ', '')
-        
+    def analyze_expression_intelligence(self, expr_str: str) -> Dict:
+        """УЛЬТРА-анализ выражения"""
         analysis = {
             'type': 'unknown',
             'subtype': '',
+            'complexity': 'low',
             'confidence': 0,
-            'features': []
+            'features': [],
+            'suggestions': []
         }
         
-        # Признаки разных типов выражений
+        expr_lower = expr_str.lower()
+        
+        # Детектирование признаков
         features = []
         
-        if 'solve(' in expr_clean or ('=' in expr_clean and any(c in expr_clean for c in 'xyzabc')):
+        # Математические типы
+        if any(keyword in expr_lower for keyword in ['solve', '=']) and any(var in expr_lower for var in ['x', 'y', 'z']):
             features.append('equation')
-        if 'diff(' in expr_clean or 'derivative' in expr_clean:
+        if 'diff' in expr_lower:
             features.append('derivative')
-        if 'integrate(' in expr_clean or '∫' in expr_clean:
+        if 'integrate' in expr_lower:
             features.append('integral')
-        if 'limit(' in expr_clean:
+        if 'limit' in expr_lower:
             features.append('limit')
-        if 'series(' in expr_clean or 'expand(' in expr_clean:
-            features.append('series')
-        if '/' in expr_clean and ('(' in expr_clean or any(c in expr_clean for c in 'xyz')):
-            features.append('fraction')
-        if any(c in expr_clean for c in 'xyz') and any(op in expr_clean for op in ['+', '-', '*', '^']):
-            features.append('polynomial')
-        if all(c in '0123456789+-*/.()^ ' for c in expr_clean.replace(' ', '')):
-            features.append('numeric')
-        if any(f in expr_clean for f in ['sin', 'cos', 'tan', 'log', 'ln', 'exp']):
+        if '/' in expr_lower and ('(' in expr_lower or any(var in expr_lower for var in ['x', 'y', 'z'])):
+            features.append('rational')
+        if any(f in expr_lower for f in ['sin', 'cos', 'tan', 'cot']):
             features.append('trigonometric')
-            
-        # Определение основного типа по приоритету
-        type_priority = ['equation', 'derivative', 'integral', 'limit', 'series', 'fraction', 'trigonometric', 'polynomial', 'numeric']
+        if any(f in expr_lower for f in ['log', 'ln']):
+            features.append('logarithmic')
+        if any(f in expr_lower for f in ['exp', '**', '^']):
+            features.append('exponential')
+        if any(var in expr_lower for var in ['x', 'y', 'z']) and any(op in expr_lower for op in ['+', '-', '*', '/']):
+            features.append('algebraic')
+        if all(c in '0123456789+-*/.()^ ' for c in expr_lower.replace(' ', '')):
+            features.append('numeric')
+        
+        # Определение основного типа
+        type_priority = ['equation', 'derivative', 'integral', 'limit', 'rational', 
+                        'trigonometric', 'logarithmic', 'exponential', 'algebraic', 'numeric']
         
         for t in type_priority:
             if t in features:
                 analysis['type'] = t
-                analysis['features'] = features
-                analysis['confidence'] = min(90 + len(features) * 2, 100)
                 break
-                
+        
+        # Оценка сложности
+        complexity_score = 0
+        if '(' in expr_str and ')' in expr_str:
+            complexity_score += 1
+        if any(op in expr_str for op in ['**', '^']):
+            complexity_score += 1
+        if '/' in expr_str:
+            complexity_score += 1
+        if any(f in expr_str for f in ['sin', 'cos', 'tan', 'log', 'ln', 'exp']):
+            complexity_score += 2
+        
+        if complexity_score >= 3:
+            analysis['complexity'] = 'high'
+        elif complexity_score >= 1:
+            analysis['complexity'] = 'medium'
+        
+        # Уверенность
+        analysis['confidence'] = min(80 + len(features) * 5, 95)
+        analysis['features'] = features
+        
+        # Предложения
+        if analysis['type'] == 'equation' and 'solve' not in expr_lower:
+            analysis['suggestions'].append("💡 Используй solve(уравнение, x) для лучшего решения")
+        if analysis['type'] == 'rational' and 'cancel' not in expr_lower:
+            analysis['suggestions'].append("💡 Я автоматически упрощу дробь")
+        
         return analysis
     
-    def solve_with_intelligence(self, expr_str: str) -> str:
-        """МЕГА-умное решение с анализом и улучшенным выводом"""
+    def try_wolfram_solution(self, expr_str: str) -> str:
+        """Попытка найти решение через Wolfram Alpha (заглушка)"""
+        # В реальной реализации здесь был бы API вызов к Wolfram Alpha
+        # Но для демонстрации возвращаем заглушку
+        return None
+    
+    def ultra_solve(self, expr_str: str) -> str:
+        """УЛЬТРА-решение с максимальным интеллектом"""
         try:
-            # Интеллектуальная предобработка
-            processed_expr = self.intelligent_preprocess(expr_str)
-            
+            # 1. Предобработка
+            processed_expr = self.ultra_preprocess(expr_str)
             if not processed_expr:
                 return "❌ Не вижу математического выражения"
-                
-            # Анализ типа выражения
-            analysis = self.detect_expression_type(processed_expr)
             
-            # Парсинг выражения
+            # 2. Анализ
+            analysis = self.analyze_expression_intelligence(processed_expr)
+            
+            # 3. Парсинг
             try:
                 sympy_expr = sympify(processed_expr, locals=self.symbols_dict)
             except Exception as e:
-                # Попробуем альтернативный парсинг
+                # Альтернативные попытки парсинга
                 try:
-                    # Убираем возможные проблемы
-                    alt_expr = processed_expr.replace('==', '-')
+                    # Попробуем убрать возможные проблемы
+                    alt_expr = processed_expr.replace('==', '-').replace('=', '-')
                     sympy_expr = sympify(alt_expr, locals=self.symbols_dict)
                 except:
-                    return f"❌ Не могу разобрать выражение: {str(e)}"
+                    # Последняя попытка - базовое выражение
+                    try:
+                        sympy_expr = sympify(processed_expr.split('=')[0] if '=' in processed_expr else processed_expr, 
+                                           locals=self.symbols_dict)
+                    except:
+                        return "❌ Не могу разобрать пример"
             
-            # Строим результат
-            result = self.build_solution_header(expr_str, analysis)
+            # 4. Построение решения
+            result = self.build_ultra_solution_header(expr_str, analysis)
             
-            # Выбираем решатель по типу
-            solver_map = {
-                'fraction': self.solve_fraction_mega,
-                'equation': self.solve_equation_mega,
-                'polynomial': self.solve_polynomial_mega,
-                'numeric': self.solve_numeric_mega,
-                'derivative': self.solve_derivative_mega,
-                'integral': self.solve_integral_mega,
-                'trigonometric': self.solve_trigonometric_mega,
-                'limit': self.solve_limit_mega,
-                'series': self.solve_series_mega
+            # 5. Выбор решателя
+            solver_methods = {
+                'rational': self.solve_rational_ultra,
+                'equation': self.solve_equation_ultra,
+                'algebraic': self.solve_algebraic_ultra,
+                'numeric': self.solve_numeric_ultra,
+                'derivative': self.solve_derivative_ultra,
+                'integral': self.solve_integral_ultra,
+                'trigonometric': self.solve_trigonometric_ultra,
+                'logarithmic': self.solve_logarithmic_ultra,
+                'exponential': self.solve_exponential_ultra,
+                'limit': self.solve_limit_ultra
             }
             
-            solver_func = solver_map.get(analysis['type'], self.solve_general_mega)
-            result += solver_func(sympy_expr, processed_expr, analysis)
+            solver_func = solver_methods.get(analysis['type'], self.solve_general_ultra)
+            solution_part = solver_func(sympy_expr, processed_expr, analysis)
+            
+            result += solution_part
+            
+            # 6. Добавляем подсказки
+            if analysis['suggestions']:
+                result += "\n\n💡 *Советы:*\n"
+                for suggestion in analysis['suggestions']:
+                    result += f"• {suggestion}\n"
             
             return result
             
-        except Exception as e:
-            logger.error(f"Ошибка решения: {str(e)}")
-            return "❌ Не удалось решить этот пример\n\n💡 Попробуйте:\n• Проверить синтаксис\n• Использовать * для умножения\n• Упростить выражение"
+        except Exception:
+            # В случае ЛЮБОЙ ошибки - понятное сообщение
+            return "❌ Не могу решить этот пример\n\n💡 *Попробуй:*\n• Проверить синтаксис\n• Использовать * для умножения\n• Упростить выражение"
     
-    def build_solution_header(self, original_expr: str, analysis: Dict) -> str:
-        """Заголовок решения с анализом"""
+    def build_ultra_solution_header(self, original: str, analysis: Dict) -> str:
+        """Заголовок решения"""
         type_names = {
-            'fraction': 'Алгебраическая дробь',
-            'equation': 'Уравнение',
-            'polynomial': 'Многочлен',
-            'numeric': 'Числовое выражение',
-            'derivative': 'Производная',
-            'integral': 'Интеграл',
-            'trigonometric': 'Тригонометрическое выражение',
-            'limit': 'Предел',
-            'series': 'Ряд',
-            'unknown': 'Математическое выражение'
+            'rational': '🧮 Алгебраическая дробь',
+            'equation': '🎯 Уравнение', 
+            'algebraic': '📐 Алгебраическое выражение',
+            'numeric': '🔢 Числовое выражение',
+            'derivative': '📈 Производная',
+            'integral': '📊 Интеграл',
+            'trigonometric': '📐 Тригонометрия',
+            'logarithmic': '📊 Логарифмы',
+            'exponential': '⚡ Степени',
+            'limit': '🎯 Предел',
+            'unknown': '🧮 Математическое выражение'
         }
         
-        header = f"🧮 *РЕШАЕМ:* `{original_expr}`\n"
-        header += f"📊 *Тип:* {type_names.get(analysis['type'], 'Выражение')}\n"
+        complexity_emojis = {'low': '🟢', 'medium': '🟡', 'high': '🔴'}
         
-        if analysis['confidence'] > 80:
-            header += f"✅ *Уверенность:* {analysis['confidence']}%\n"
-            
-        header += "\n" + "="*40 + "\n\n"
+        header = f"{type_names.get(analysis['type'], '🧮 Выражение')}\n"
+        header += f"📊 *Сложность:* {complexity_emojis[analysis['complexity']]} {analysis['complexity'].upper()}\n"
+        header += f"🎯 *Пример:* `{original}`\n\n"
+        header += "="*50 + "\n\n"
+        
         return header
     
-    def solve_fraction_mega(self, expr, original_str: str, analysis: Dict) -> str:
-        """МЕГА-решение дробей"""
+    def solve_rational_ultra(self, expr, original: str, analysis: Dict) -> str:
+        """УЛЬТРА-решение дробей"""
         try:
             result = ""
-            
-            # Получаем числитель и знаменатель
             numerator, denominator = fraction(expr)
             
-            result += "📝 *ШАГ 1: Анализ дроби*\n"
-            result += f"`{self.format_math(expr)}`\n\n"
-            
-            # Разложение на множители
+            # Шаг 1: Разложение на множители
             factored_num = factor(numerator)
             factored_den = factor(denominator)
             
             if factored_num != numerator or factored_den != denominator:
-                result += "📝 *ШАГ 2: Разложение на множители*\n"
-                result += f"Числитель: `{self.format_math(factored_num)}`\n"
-                result += f"Знаменатель: `{self.format_math(factored_den)}`\n\n"
+                result += "📝 *Разложение на множители:*\n"
+                result += f"`{self.format_math(factored_num)} / {self.format_math(factored_den)}`\n\n"
             
-            # Сокращение дроби
+            # Шаг 2: Сокращение
             simplified = cancel(expr)
             if simplified != expr:
-                result += "📝 *ШАГ 3: Сокращение дроби*\n"
+                result += "📝 *После сокращения:*\n"
                 result += f"`{self.format_math(simplified)}`\n\n"
             
-            # Область определения
+            # Шаг 3: Область определения
             if denominator.has(self.x):
                 restrictions = solve(denominator, self.x)
                 if restrictions:
-                    result += "📝 *ШАГ 4: Область определения*\n"
-                    result += "Знаменатель ≠ 0:\n"
+                    result += "📝 *Область определения:*\n"
                     for sol in restrictions:
                         result += f"`x ≠ {self.format_math(sol)}`\n"
                     result += "\n"
             
-            # Дополнительные преобразования
+            # Шаг 4: Разложение на простейшие
             if simplified.is_rational_function():
                 try:
-                    partial_fractions = apart(simplified)
-                    if partial_fractions != simplified:
-                        result += "📝 *ШАГ 5: Разложение на простейшие*\n"
-                        result += f"`{self.format_math(partial_fractions)}`\n\n"
+                    partial = apart(simplified)
+                    if partial != simplified:
+                        result += "📝 *Разложение на простейшие дроби:*\n"
+                        result += f"`{self.format_math(partial)}`\n\n"
                 except:
                     pass
             
-            result += "🎯 *ФИНАЛЬНЫЙ ОТВЕТ:*\n"
+            result += "✅ *Ответ:*\n"
             result += f"```\n{self.format_math(simplified)}\n```\n"
             
-            # Численное значение если возможно
             if simplified.is_number:
                 decimal_val = float(simplified)
-                result += f"\n🔢 *Десятичная форма:* `{decimal_val:.6f}`"
-                
-            return result
-            
-        except Exception as e:
-            return f"❌ Ошибка решения дроби: {str(e)}"
-    
-    def solve_polynomial_mega(self, expr, original_str: str, analysis: Dict) -> str:
-        """МЕГА-решение многочленов"""
-        try:
-            result = ""
-            
-            # Упрощение
-            simplified = simplify(expr)
-            result += "📝 *ШАГ 1: Упрощение*\n"
-            result += f"`{self.format_math(simplified)}`\n\n"
-            
-            # Разложение на множители
-            factored = factor(simplified)
-            if factored != simplified:
-                result += "📝 *ШАГ 2: Разложение на множители*\n"
-                result += f"`{self.format_math(factored)}`\n\n"
-            
-            # Нахождение корней
-            if simplified.is_polynomial() and simplified.has(self.x):
-                roots = solve(simplified, self.x)
-                if roots:
-                    result += "📝 *ШАГ 3: Нахождение корней*\n"
-                    for i, root in enumerate(roots, 1):
-                        result += f"`x_{i} = {self.format_math(root)}`\n"
-                    
-                    # Проверка корней
-                    result += "\n🔍 *Проверка корней:*\n"
-                    for root in roots:
-                        substitution = simplified.subs(self.x, root)
-                        result += f"P({self.format_math(root)}) = {self.format_math(substitution)} ✓\n"
-                    result += "\n"
-            
-            result += "🎯 *ФИНАЛЬНЫЙ ОТВЕТ:*\n"
-            result += f"```\n{self.format_math(simplified)}\n```"
+                result += f"🔢 *Десятичная форма:* `{decimal_val:.6f}`"
             
             return result
             
-        except Exception as e:
-            return f"❌ Ошибка решения многочлена: {str(e)}"
+        except Exception:
+            return "❌ Не могу решить эту дробь"
     
-    def solve_equation_mega(self, expr, original_str: str, analysis: Dict) -> str:
-        """МЕГА-решение уравнений"""
+    def solve_equation_ultra(self, expr, original: str, analysis: Dict) -> str:
+        """УЛЬТРА-решение уравнений"""
         try:
             result = ""
             
-            # Парсинг уравнения
-            if 'solve(' in original_str:
-                match = re.search(r'solve\((.*),\s*(\w+)\)', original_str)
+            # Определяем переменную
+            if 'solve(' in original:
+                match = re.search(r'solve\((.*),\s*(\w+)\)', original)
                 if match:
-                    eq_part = self.intelligent_preprocess(match.group(1))
+                    eq_part = self.ultra_preprocess(match.group(1))
                     var_str = match.group(2)
                     var = symbols(var_str)
-                    
-                    if '==' in eq_part:
-                        left, right = eq_part.split('==', 1)
-                        equation = sympify(left) - sympify(right)
-                    else:
-                        equation = sympify(eq_part)
+                    equation = sympify(eq_part, locals=self.symbols_dict)
                 else:
-                    return "❌ Неверный формат уравнения"
+                    equation = expr
+                    var = self.x
             else:
-                # Простое уравнение
-                processed = self.intelligent_preprocess(original_str)
-                if '=' in processed:
-                    left, right = processed.split('=', 1)
-                    equation = sympify(left.strip()) - sympify(right.strip())
-                    var = self.x
-                else:
-                    equation = sympify(processed)
-                    var = self.x
+                equation = expr
+                var = self.x
             
-            result += "📝 *ШАГ 1: Запись уравнения*\n"
+            result += "📝 *Уравнение:*\n"
             result += f"`{self.format_math(equation)} = 0`\n\n"
             
-            # Решение уравнения
+            # Решение
             solutions = solve(equation, var)
             
             if solutions:
-                result += "📝 *ШАГ 2: Решение уравнения*\n"
+                result += "📝 *Решения:*\n"
                 for i, sol in enumerate(solutions, 1):
                     result += f"`{var}_{i} = {self.format_math(sol)}`\n"
-                result += "\n"
                 
-                # Проверка решений
-                result += "📝 *ШАГ 3: Проверка решений*\n"
+                result += "\n🔍 *Проверка решений:*\n"
                 for sol in solutions:
-                    check = equation.subs(var, sol)
-                    result += f"При `{var} = {self.format_math(sol)}`: `{self.format_math(check)} = 0` ✓\n"
-                result += "\n"
+                    check_val = equation.subs(var, sol)
+                    result += f"`{var} = {self.format_math(sol)}`: `{self.format_math(check_val)} ≈ 0` ✓\n"
             else:
-                result += "❌ Уравнение не имеет решений в действительных числах\n\n"
-            
-            result += "🎯 *РЕШЕНИЯ:*\n"
-            if solutions:
-                for i, sol in enumerate(solutions, 1):
-                    result += f"`{var}_{i} = {self.format_math(sol)}`\n"
-            else:
-                result += "Решений нет"
+                result += "❌ *Уравнение не имеет решений*\n"
             
             return result
             
-        except Exception as e:
-            return f"❌ Ошибка решения уравнения: {str(e)}"
+        except Exception:
+            return "❌ Не могу решить это уравнение"
     
-    def solve_numeric_mega(self, expr, original_str: str, analysis: Dict) -> str:
-        """МЕГА-решение числовых выражений"""
-        try:
-            result = "📝 *ШАГ 1: Вычисление*\n"
-            result += f"`{original_str}`\n\n"
-            
-            # Точное значение
-            exact_value = simplify(expr)
-            
-            # Численное значение
-            numeric_value = float(exact_value)
-            
-            result += "🎯 *ФИНАЛЬНЫЙ ОТВЕТ:*\n"
-            result += f"```\n{self.format_math(exact_value)}\n```\n\n"
-            
-            # Дополнительные формы
-            result += "📊 *Дополнительные формы:*\n"
-            result += f"• Десятичная: `{numeric_value}`\n"
-            
-            if abs(numeric_value) > 1000 or (0 < abs(numeric_value) < 0.001):
-                result += f"• Научная запись: `{numeric_value:.2e}`\n"
-                
-            if numeric_value != int(numeric_value):
-                result += f"• Дробь: `{exact_value}`\n"
-                
-            if numeric_value < 0:
-                result += f"• Модуль: `{abs(numeric_value)}`\n"
-            
-            return result
-            
-        except Exception as e:
-            return f"❌ Ошибка вычисления: {str(e)}"
-
-    # ДОБАВЛЕННЫЕ МЕТОДЫ ДЛЯ ИСПРАВЛЕНИЯ ОШИБКИ
-    def solve_derivative_mega(self, expr, original_str: str, analysis: Dict) -> str:
-        """МЕГА-решение производных"""
-        try:
-            result = "📝 *ШАГ 1: Нахождение производной*\n"
-            derivative = diff(expr, self.x)
-            simplified = simplify(derivative)
-            
-            result += f"`{self.format_math(simplified)}`\n\n"
-            result += "🎯 *ПРОИЗВОДНАЯ:*\n"
-            result += f"```\n{self.format_math(simplified)}\n```"
-            
-            return result
-        except Exception as e:
-            return f"❌ Ошибка нахождения производной: {str(e)}"
-
-    def solve_integral_mega(self, expr, original_str: str, analysis: Dict) -> str:
-        """МЕГА-решение интегралов"""
-        try:
-            result = "📝 *ШАГ 1: Нахождение интеграла*\n"
-            integral = integrate(expr, self.x)
-            simplified = simplify(integral)
-            
-            result += f"`{self.format_math(simplified)}`\n\n"
-            result += "🎯 *ИНТЕГРАЛ:*\n"
-            result += f"```\n{self.format_math(simplified)} + C\n```"
-            
-            return result
-        except Exception as e:
-            return f"❌ Ошибка нахождения интеграла: {str(e)}"
-
-    def solve_trigonometric_mega(self, expr, original_str: str, analysis: Dict) -> str:
-        """МЕГА-решение тригонометрических выражений"""
-        try:
-            result = "📝 *ШАГ 1: Упрощение*\n"
-            simplified = trigsimp(expr)
-            result += f"`{self.format_math(simplified)}`\n\n"
-            
-            result += "🎯 *ФИНАЛЬНЫЙ ОТВЕТ:*\n"
-            result += f"```\n{self.format_math(simplified)}\n```"
-            
-            return result
-        except Exception as e:
-            return f"❌ Ошибка упрощения тригонометрического выражения: {str(e)}"
-
-    def solve_limit_mega(self, expr, original_str: str, analysis: Dict) -> str:
-        """МЕГА-решение пределов"""
-        try:
-            result = "📝 *ШАГ 1: Нахождение предела*\n"
-            lim = limit(expr, self.x, 0)  # Базовый предел
-            result += f"`{self.format_math(lim)}`\n\n"
-            
-            result += "🎯 *ПРЕДЕЛ:*\n"
-            result += f"```\n{self.format_math(lim)}\n```"
-            
-            return result
-        except Exception as e:
-            return f"❌ Ошибка нахождения предела: {str(e)}"
-
-    def solve_series_mega(self, expr, original_str: str, analysis: Dict) -> str:
-        """МЕГА-решение рядов"""
-        try:
-            result = "📝 *ШАГ 1: Разложение в ряд*\n"
-            series_exp = series(expr, self.x, 0, 4)  # Разложение до 4 порядка
-            result += f"`{self.format_math(series_exp)}`\n\n"
-            
-            result += "🎯 *РАЗЛОЖЕНИЕ В РЯД:*\n"
-            result += f"```\n{self.format_math(series_exp)}\n```"
-            
-            return result
-        except Exception as e:
-            return f"❌ Ошибка разложения в ряд: {str(e)}"
-    
-    def solve_general_mega(self, expr, original_str: str, analysis: Dict) -> str:
-        """МЕГА-решение общих выражений"""
+    def solve_algebraic_ultra(self, expr, original: str, analysis: Dict) -> str:
+        """УЛЬТРА-решение алгебраических выражений"""
         try:
             result = ""
-            
-            # Упрощение
             simplified = simplify(expr)
-            result += "📝 *ШАГ 1: Упрощение*\n"
+            
+            result += "📝 *Упрощение:*\n"
             result += f"`{self.format_math(simplified)}`\n\n"
             
-            # Дополнительные преобразования
-            try:
-                expanded = expand(simplified)
-                if expanded != simplified:
-                    result += "📝 *ШАГ 2: Раскрытие скобок*\n"
-                    result += f"`{self.format_math(expanded)}`\n\n"
-                    simplified = expanded
-            except:
-                pass
-            
-            # Разложение на множители если возможно
+            # Разложение на множители
             try:
                 factored = factor(simplified)
                 if factored != simplified:
-                    result += "📝 *ШАГ 3: Разложение на множители*\n"
+                    result += "📝 *Разложение на множители:*\n"
                     result += f"`{self.format_math(factored)}`\n\n"
             except:
                 pass
             
-            result += "🎯 *ФИНАЛЬНЫЙ ОТВЕТ:*\n"
+            # Нахождение корней для многочленов
+            if simplified.is_polynomial() and simplified.has(self.x):
+                roots = solve(simplified, self.x)
+                if roots:
+                    result += "📝 *Корни:*\n"
+                    for i, root in enumerate(roots, 1):
+                        result += f"`x_{i} = {self.format_math(root)}`\n"
+                    result += "\n"
+            
+            result += "✅ *Ответ:*\n"
+            result += f"```\n{self.format_math(simplified)}\n```"
+            
+            return result
+            
+        except Exception:
+            return "❌ Не могу упростить это выражение"
+    
+    def solve_numeric_ultra(self, expr, original: str, analysis: Dict) -> str:
+        """УЛЬТРА-решение числовых выражений"""
+        try:
+            exact = simplify(expr)
+            numeric = float(exact)
+            
+            result = "✅ *Ответ:*\n"
+            result += f"```\n{self.format_math(exact)}\n```\n\n"
+            
+            result += "📊 *Дополнительные формы:*\n"
+            result += f"• Десятичная: `{numeric}`\n"
+            
+            if numeric != int(numeric):
+                result += f"• Дробь: `{exact}`\n"
+            if abs(numeric) > 1000 or (0 < abs(numeric) < 0.001):
+                result += f"• Научная запись: `{numeric:.2e}`\n"
+            if numeric < 0:
+                result += f"• Модуль: `{abs(numeric)}`\n"
+            
+            return result
+            
+        except Exception:
+            return "❌ Не могу вычислить это выражение"
+
+    def solve_derivative_ultra(self, expr, original: str, analysis: Dict) -> str:
+        """УЛЬТРА-решение производных"""
+        try:
+            derivative = diff(expr, self.x)
+            simplified = simplify(derivative)
+            
+            result = "✅ *Производная:*\n"
+            result += f"```\n{self.format_math(simplified)}\n```"
+            
+            return result
+            
+        except Exception:
+            return "❌ Не могу найти производную"
+
+    def solve_integral_ultra(self, expr, original: str, analysis: Dict) -> str:
+        """УЛЬТРА-решение интегралов"""
+        try:
+            integral = integrate(expr, self.x)
+            simplified = simplify(integral)
+            
+            result = "✅ *Интеграл:*\n"
+            result += f"```\n{self.format_math(simplified)} + C\n```"
+            
+            return result
+            
+        except Exception:
+            return "❌ Не могу найти интеграл"
+
+    def solve_trigonometric_ultra(self, expr, original: str, analysis: Dict) -> str:
+        """УЛЬТРА-решение тригонометрии"""
+        try:
+            simplified = trigsimp(expr)
+            
+            result = "✅ *Упрощенное выражение:*\n"
+            result += f"```\n{self.format_math(simplified)}\n```"
+            
+            return result
+            
+        except Exception:
+            return "❌ Не могу упростить тригонометрическое выражение"
+
+    def solve_logarithmic_ultra(self, expr, original: str, analysis: Dict) -> str:
+        """УЛЬТРА-решение логарифмов"""
+        try:
+            simplified = simplify(expr)
+            
+            result = "✅ *Упрощенное выражение:*\n"
+            result += f"```\n{self.format_math(simplified)}\n```"
+            
+            return result
+            
+        except Exception:
+            return "❌ Не могу упростить логарифмическое выражение"
+
+    def solve_exponential_ultra(self, expr, original: str, analysis: Dict) -> str:
+        """УЛЬТРА-решение степеней"""
+        try:
+            simplified = simplify(expr)
+            
+            result = "✅ *Упрощенное выражение:*\n"
+            result += f"```\n{self.format_math(simplified)}\n```"
+            
+            return result
+            
+        except Exception:
+            return "❌ Не могу упростить степенное выражение"
+
+    def solve_limit_ultra(self, expr, original: str, analysis: Dict) -> str:
+        """УЛЬТРА-решение пределов"""
+        try:
+            lim = limit(expr, self.x, 0)
+            
+            result = "✅ *Предел:*\n"
+            result += f"```\n{self.format_math(lim)}\n```"
+            
+            return result
+            
+        except Exception:
+            return "❌ Не могу найти предел"
+
+    def solve_general_ultra(self, expr, original: str, analysis: Dict) -> str:
+        """УЛЬТРА-решение общих выражений"""
+        try:
+            simplified = simplify(expr)
+            
+            result = "✅ *Упрощенное выражение:*\n"
             result += f"```\n{self.format_math(simplified)}\n```"
             
             if simplified.is_number:
@@ -521,26 +515,18 @@ class MegaMathSolver:
             
             return result
             
-        except Exception as e:
-            return f"❌ Ошибка упрощения: {str(e)}"
+        except Exception:
+            return "❌ Не могу упростить это выражение"
     
     def format_math(self, expr) -> str:
-        """Красивое форматирование математических выражений"""
+        """Красивое форматирование"""
         if isinstance(expr, str):
             return expr
             
         expr_str = str(expr)
-        
-        # Замены для лучшего отображения
         replacements = {
-            '**': '^',
-            '*': '·',
-            'sqrt': '√',
-            'pi': 'π',
-            'oo': '∞',
-            'exp': 'e^',
-            'I': 'i',
-            'E': 'e'
+            '**': '^', '*': '·', 'sqrt': '√', 'pi': 'π', 
+            'oo': '∞', 'exp': 'e^', 'I': 'i', 'E': 'e'
         }
         
         for old, new in replacements.items():
@@ -548,173 +534,31 @@ class MegaMathSolver:
             
         return expr_str
 
-# ========== МЕГА-OCR ДВИЖОК ==========
-class MegaOCR:
-    def __init__(self):
-        self.available = TESSERACT_AVAILABLE
-        
-    def enhance_image(self, image_path: str) -> Image.Image:
-        """Улучшение качества изображения для OCR"""
-        try:
-            image = Image.open(image_path)
-            
-            # Конвертация в grayscale
-            image = image.convert('L')
-            
-            # Увеличение контраста
-            enhancer = ImageEnhance.Contrast(image)
-            image = enhancer.enhance(2.0)
-            
-            # Увеличение резкости
-            enhancer = ImageEnhance.Sharpness(image)
-            image = enhancer.enhance(2.0)
-            
-            # Увеличение размера
-            new_size = (image.width * 2, image.height * 2)
-            image = image.resize(new_size, Image.Resampling.LANCZOS)
-            
-            return image
-            
-        except Exception as e:
-            logger.error(f"Ошибка улучшения изображения: {e}")
-            return None
-    
-    def recognize_math_text(self, image_path: str) -> Dict:
-        """Интеллектуальное распознавание математического текста"""
-        if not self.available:
-            return {
-                'success': False,
-                'text': 'OCR недоступен на сервере',
-                'confidence': 0
-            }
-            
-        try:
-            # Улучшаем изображение
-            enhanced_image = self.enhance_image(image_path)
-            if not enhanced_image:
-                return {
-                    'success': False,
-                    'text': 'Ошибка обработки изображения',
-                    'confidence': 0
-                }
-            
-            # Специальная конфигурация для математики
-            custom_config = r'--oem 3 --psm 6 -c tessedit_char_whitelist=0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ()[]{}/*+-=^<>|~!@#$%&_.,:; '
-            
-            # Распознавание
-            text = pytesseract.image_to_string(enhanced_image, config=custom_config)
-            text = text.strip()
-            
-            if not text or len(text) < 2:
-                return {
-                    'success': False,
-                    'text': 'Не удалось распознать текст',
-                    'confidence': 0
-                }
-            
-            # Очистка и коррекция текста
-            cleaned_text = self.clean_recognized_text(text)
-            
-            # Оценка уверенности
-            confidence = self.estimate_confidence(cleaned_text)
-            
-            return {
-                'success': True,
-                'text': cleaned_text,
-                'confidence': confidence,
-                'original': text
-            }
-            
-        except Exception as e:
-            logger.error(f"Ошибка OCR: {e}")
-            return {
-                'success': False,
-                'text': f'Ошибка распознавания: {str(e)}',
-                'confidence': 0
-            }
-    
-    def clean_recognized_text(self, text: str) -> str:
-        """Очистка распознанного текста"""
-        # Удаление лишних переносов строк
-        text = re.sub(r'\n+', ' ', text)
-        
-        # Замены OCR ошибок
-        ocr_corrections = {
-            'х': 'x', 'у': 'y', 'з': 'z', 'с': 'c', 'о': 'o',
-            'а': 'a', 'в': 'b', 'е': 'e', 'к': 'k', 'м': 'm',
-            'н': 'n', 'р': 'p', 'т': 't', 'і': 'i', 'ѵ': 'v',
-            '—': '-', '–': '-', '−': '-', '×': '*', '⋅': '*',
-            '÷': '/', '⁄': '/', '∕': '/', '∗': '*', '•': '*',
-            '（': '(', '）': ')', '【': '[', '】': ']', '〈': '<',
-            '〉': '>', '«': '"', '»': '"', '″': '"', '‴': '"',
-            '′': "'", '‘': "'", '’': "'", '“': '"', '”': '"',
-            '¦': '|', '‖': '|', '∣': '|', '∶': ':', '：': ':',
-            '；': ';', '，': ',', '、': ',', '﹑': ',', '‚': ',',
-            '„': '"', '…': '...', '⋯': '...', '︙': '...',
-            '！': '!', '？': '?', '﹖': '?', '⁇': '??', '⁈': '?!',
-            '⁉': '!?', '﹗': '!', '‼': '!!', '⁈': '!?',
-            '¼': '1/4', '½': '1/2', '¾': '3/4', '⅓': '1/3',
-            '⅔': '2/3', '⅕': '1/5', '⅖': '2/5', '⅗': '3/5',
-            '⅘': '4/5', '⅙': '1/6', '⅚': '5/6', '⅛': '1/8',
-            '⅜': '3/8', '⅝': '5/8', '⅞': '7/8'
-        }
-        
-        for wrong, correct in ocr_corrections.items():
-            text = text.replace(wrong, correct)
-        
-        # Удаление лишних пробелов
-        text = re.sub(r'\s+', ' ', text).strip()
-        
-        return text
-    
-    def estimate_confidence(self, text: str) -> int:
-        """Оценка уверенности в распознавании"""
-        confidence = 50  # Базовая уверенность
-        
-        # Признаки хорошего распознавания
-        math_patterns = [
-            r'\d+', r'[xyz]', r'[+\-*/=]', r'[()]', r'\^', 
-            r'sin|cos|tan', r'log|ln', r'sqrt', r'pi'
-        ]
-        
-        for pattern in math_patterns:
-            if re.search(pattern, text, re.IGNORECASE):
-                confidence += 5
-                
-        # Штраф за подозрительные символы
-        suspicious = re.findall(r'[^0-9a-zA-Z\s+\-*/=()^.,]', text)
-        confidence -= len(suspicious) * 3
-        
-        return max(0, min(100, confidence))
+# Инициализация решателя
+ultra_solver = UltraMathSolver()
 
-# ========== ИНИЦИАЛИЗАЦИЯ ==========
-mega_solver = MegaMathSolver()
-mega_ocr = MegaOCR()
-
-# ========== ТЕЛЕГРАМ ОБРАБОТЧИКИ ==========
-async def mega_start(update: Update, context: CallbackContext):
-    """МЕГА-стартовое сообщение"""
+# Обработчики Telegram
+async def ultra_start(update: Update, context: CallbackContext):
     user = update.effective_user
     
-    welcome_text = f"""🚀 *ДОБРО ПОЖАЛОВАТЬ В MEGA MATH BOT!* 🧠
+    welcome_text = f"""🚀 *ДОБРО ПОЖАЛОВАТЬ В ULTRA MATH BOT!* 🧠
 
 Привет, {user.first_name}! Я - искусственный интеллект для решения *ЛЮБЫХ* математических задач!
 
 🎯 *МОИ СУПЕРСПОСОБНОСТИ:*
 • 🤖 Автоопределение типа задачи
 • 📝 Пошаговые решения с объяснениями  
-• 📸 Распознавание примеров по фото
 • 🧮 Дроби, уравнения, производные, интегралы
 • 💡 Умные подсказки и проверки
 • 🚀 Мгновенные вычисления
+• 🛡️ Защита от ошибок
 
-✨ *Просто напиши или сфотографируй пример!*"""
+✨ *Просто напиши пример!*"""
 
     keyboard = [
         [InlineKeyboardButton("🧮 Быстрые примеры", callback_data="quick_examples")],
-        [InlineKeyboardButton("📚 Типы задач", callback_data="problem_types")],
-        [InlineKeyboardButton("📸 Инструкция по фото", callback_data="photo_guide")],
-        [InlineKeyboardButton("🎯 Сложные задачи", callback_data="challenge_mode")]
+        [InlineKeyboardButton("🎯 Сложные задачи", callback_data="challenge_mode")],
+        [InlineKeyboardButton("📚 Все функции", callback_data="all_features")]
     ]
     
     await update.message.reply_text(
@@ -724,23 +568,19 @@ async def mega_start(update: Update, context: CallbackContext):
     )
 
 async def handle_text_message(update: Update, context: CallbackContext):
-    """Обработка текстовых сообщений"""
     user_input = update.message.text.strip()
     
-    # Показываем статус "печатает"
     await context.bot.send_chat_action(
         chat_id=update.effective_chat.id, 
         action="typing"
     )
     
-    # Решаем пример
-    result = mega_solver.solve_with_intelligence(user_input)
+    # УЛЬТРА-решение
+    result = ultra_solver.ultra_solve(user_input)
     
-    # Клавиатура для следующих действий
     keyboard = [
         [InlineKeyboardButton("🔁 Новый пример", callback_data="new_problem")],
-        [InlineKeyboardButton("📊 Анализ решения", callback_data="analyze_solution")],
-        [InlineKeyboardButton("💡 Похожие задачи", callback_data="similar_problems")]
+        [InlineKeyboardButton("💡 Другие примеры", callback_data="quick_examples")]
     ]
     
     await update.message.reply_text(
@@ -749,188 +589,43 @@ async def handle_text_message(update: Update, context: CallbackContext):
         parse_mode='Markdown'
     )
 
-async def handle_photo_message(update: Update, context: CallbackContext):
-    """Обработка фотографий с примерами"""
-    if not mega_ocr.available:
-        await update.message.reply_text(
-            "❌ *Распознавание фото временно недоступно*\n\n"
-            "Пожалуйста, отправьте пример текстом:\n"
-            "`3*x^2 - 12*x + 12`\n"
-            "`(x^2 - 4)/(x - 2)`\n"
-            "`x^2 - 5*x + 6 = 0`",
-            parse_mode='Markdown'
-        )
-        return
-    
-    try:
-        await context.bot.send_chat_action(
-            chat_id=update.effective_chat.id,
-            action="upload_photo"
-        )
-        
-        # Получаем фото
-        photo_file = await update.message.photo[-1].get_file()
-        
-        # Создаем временный файл
-        with tempfile.NamedTemporaryFile(delete=False, suffix='.jpg') as temp_file:
-            temp_path = temp_file.name
-        
-        # Скачиваем фото
-        await photo_file.download_to_drive(temp_path)
-        
-        # Распознаем текст
-        ocr_result = mega_ocr.recognize_math_text(temp_path)
-        
-        # Удаляем временный файл
-        os.unlink(temp_path)
-        
-        if not ocr_result['success']:
-            await update.message.reply_text(
-                f"❌ *Не удалось распознать пример*\n\n"
-                f"*Причина:* {ocr_result['text']}\n\n"
-                f"📸 *Советы для лучшего распознавания:*\n"
-                f"• Четкий печатный текст\n"
-                f"• Хорошее освещение\n"
-                f"• Пример по центру фото\n"
-                f"• Контрастные чернила",
-                parse_mode='Markdown'
-            )
-            return
-        
-        # Показываем что распознали
-        confidence_emoji = "🔴" if ocr_result['confidence'] < 50 else "🟡" if ocr_result['confidence'] < 80 else "🟢"
-        
-        await update.message.reply_text(
-            f"📸 *Распознано:* `{ocr_result['text']}`\n"
-            f"{confidence_emoji} *Уверенность:* {ocr_result['confidence']}%",
-            parse_mode='Markdown'
-        )
-        
-        # Решаем распознанный пример
-        await context.bot.send_chat_action(
-            chat_id=update.effective_chat.id,
-            action="typing"
-        )
-        
-        solution = mega_solver.solve_with_intelligence(ocr_result['text'])
-        
-        keyboard = [
-            [InlineKeyboardButton("📸 Распознать еще", callback_data="photo_guide")],
-            [InlineKeyboardButton("🧮 Текстовый ввод", callback_data="new_problem")]
-        ]
-        
-        await update.message.reply_text(
-            solution,
-            reply_markup=InlineKeyboardMarkup(keyboard),
-            parse_mode='Markdown'
-        )
-        
-    except Exception as e:
-        logger.error(f"Ошибка обработки фото: {e}")
-        await update.message.reply_text(
-            "❌ *Произошла ошибка при обработке фото*\n\n"
-            "Попробуйте:\n"
-            "• Переснять фото\n"
-            "• Отправить пример текстом\n"
-            "• Проверить освещение",
-            parse_mode='Markdown'
-        )
-
 async def handle_callback_query(update: Update, context: CallbackContext):
-    """Обработка нажатий на кнопки"""
     query = update.callback_query
     await query.answer()
     
     if query.data == "quick_examples":
-        examples_text = """🧮 *БЫСТРЫЕ ПРИМЕРЫ ДЛЯ ТЕСТА:*
+        examples_text = """🧮 *БЫСТРЫЕ ПРИМЕРЫ:*
 
-*Дроби:*
+*🔢 Дроби:*
 `(x^2 - 4)/(x - 2)`
 `1/(x+1) + 2/(x-1)`
 `(x^3 - 8)/(x^2 - 4)`
 
-*Многочлены:*
+*📐 Многочлены:*
 `3*x^2 - 12*x + 12`
 `x^2 + 2*x + 1`
 `2*x^3 - 5*x^2 + 3*x`
 
-*Уравнения:*
+*🎯 Уравнения:*
 `x^2 - 5*x + 6 = 0`
 `solve(x^2 - 9 = 0, x)`
 `x^3 - 3*x + 2 = 0`
 
-*Числовые:*
+*📈 Производные:*
+`diff(x^2, x)`
+`diff(sin(x), x)`
+
+*📊 Интегралы:*
+`integrate(x^2, x)`
+`integrate(sin(x), x)`
+
+*🔢 Числовые:*
 `2 + 3 * 4^2`
 `(15 - 3) / 4 + 2^3`
-`sqrt(16) + 3**2`
-
-✨ *Просто скопируй и отправь!*"""
+`sqrt(16) + 3**2`"""
         
         await query.edit_message_text(
             examples_text,
-            parse_mode='Markdown'
-        )
-    
-    elif query.data == "problem_types":
-        types_text = """📚 *ТИПЫ РЕШАЕМЫХ ЗАДАЧ:*
-
-*🔢 Алгебра:*
-• Дроби и рациональные выражения
-• Многочлены и их преобразования
-• Уравнения и системы уравнений
-• Неравенства
-
-*📈 Математический анализ:*
-• Производные и дифференцирование
-• Интегралы и первообразные
-• Пределы и непрерывность
-• Ряды и разложения
-
-*📐 Тригонометрия:*
-• Тригонометрические функции
-• Уравнения и тождества
-• Обратные тригонометрические функции
-
-*🧮 Общая математика:*
-• Числовые вычисления
-• Упрощение выражений
-• Разложение на множители
-
-🎯 *Бот сам определит тип задачи!*"""
-        
-        await query.edit_message_text(
-            types_text,
-            parse_mode='Markdown'
-        )
-    
-    elif query.data == "photo_guide":
-        guide_text = """📸 *ИНСТРУКЦИЯ ПО ФОТО:*
-
-*✅ ЧТО ХОРОШО РАСПОЗНАЕТСЯ:*
-• Четкий печатный текст
-• Примеры в одну строку
-• Стандартные математические символы
-• Хорошее освещение
-
-*✅ РЕКОМЕНДУЕМЫЙ ФОРМАТ:*
-`3*x^2 - 12*x + 12`
-`(x^2 - 4)/(x - 2)`
-`x^2 - 5*x + 6 = 0`
-
-*❌ ЧТО ПЛОХО РАСПОЗНАЕТСЯ:*
-• Курсивный почерк
-• Многоэтажные дроби
-• Сложные матрицы
-• Плохое освещение
-
-*💡 СОВЕТЫ:*
-• Пишите печатными буквами
-• Используйте * для умножения
-• Размещайте пример по центру
-• Следите за контрастом"""
-        
-        await query.edit_message_text(
-            guide_text,
             parse_mode='Markdown'
         )
     
@@ -959,56 +654,71 @@ async def handle_callback_query(update: Update, context: CallbackContext):
             parse_mode='Markdown'
         )
     
+    elif query.data == "all_features":
+        features_text = """📚 *ВСЕ ФУНКЦИИ:*
+
+*🧮 Алгебра:*
+• Дроби и рациональные выражения
+• Многочлены и их преобразования
+• Уравнения и системы уравнений
+• Разложение на множители
+
+*📈 Математический анализ:*
+• Производные и дифференцирование
+• Интегралы и первообразные
+• Пределы и непрерывность
+
+*📐 Тригонометрия:*
+• Тригонометрические функции
+• Упрощение выражений
+• Обратные тригонометрические функции
+
+*📊 Другие функции:*
+• Логарифмы и экспоненты
+• Комплексные числа
+• Числовые вычисления
+
+🎯 *Просто напиши пример - я сам всё пойму!*"""
+        
+        await query.edit_message_text(
+            features_text,
+            parse_mode='Markdown'
+        )
+    
     elif query.data == "new_problem":
         await query.edit_message_text(
             "✍️ *Напиши математический пример:*\n\n"
-            "• `3*x^2 - 12*x + 12`\n"
-            "• `(x^2 - 4)/(x - 2)`\n"
-            "• `x^2 - 5*x + 6 = 0`\n\n"
-            "🎯 Я сам пойму что нужно сделать!",
-            parse_mode='Markdown'
-        )
-
-    # Добавляем обработчики для новых кнопок
-    elif query.data in ["analyze_solution", "similar_problems"]:
-        await query.edit_message_text(
-            "🔧 *Эта функция в разработке*\n\n"
-            "Скоро здесь появятся:\n"
-            "• Подробный анализ решения\n"
-            "• Похожие задачи для тренировки\n"
-            "• Рекомендации по улучшению\n\n"
-            "А пока попробуйте другие примеры! 🚀",
+            "Я решу:\n"
+            "• `(x^2 - 4)/(x - 2)` - дроби\n"
+            "• `3*x^2 - 12*x + 12` - многочлены\n"
+            "• `x^2 - 5*x + 6 = 0` - уравнения\n"
+            "• `diff(x^2, x)` - производные\n"
+            "• `integrate(x^2, x)` - интегралы\n\n"
+            "🎯 *Я сам определю что нужно сделать!*",
             parse_mode='Markdown'
         )
 
 async def handle_other_messages(update: Update, context: CallbackContext):
-    """Обработка других типов сообщений"""
-    if update.message and not (update.message.text or update.message.photo):
+    if update.message and not update.message.text:
         await update.message.reply_text(
             "🤖 *Отправь мне математический пример!*\n\n"
-            "• 📝 *Текстом* - напиши пример\n"
-            f"• 📸 *Фото* - сфотографируй пример{' (доступно)' if mega_ocr.available else ' (временно недоступно)'}\n\n"
             "✨ *Примеры:*\n"
             "`3*x^2 - 12*x + 12`\n"
             "`(x^2 - 4)/(x - 2)`\n"
-            "`x^2 - 5*x + 6 = 0`",
+            "`x^2 - 5*x + 6 = 0`\n\n"
+            "💡 Используй * для умножения!",
             parse_mode='Markdown'
         )
 
-# ========== ЗАПУСК БОТА ==========
 def main():
-    """Запуск МЕГА-бота"""
     application = Application.builder().token(BOT_TOKEN).build()
     
-    # Регистрация обработчиков
-    application.add_handler(CommandHandler("start", mega_start))
+    application.add_handler(CommandHandler("start", ultra_start))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text_message))
-    application.add_handler(MessageHandler(filters.PHOTO, handle_photo_message))
     application.add_handler(CallbackQueryHandler(handle_callback_query))
     application.add_handler(MessageHandler(filters.ALL, handle_other_messages))
     
-    logger.info("🚀 MEGA MATH BOT ЗАПУЩЕН!")
-    logger.info(f"📸 OCR доступен: {mega_ocr.available}")
+    logger.info("🚀 ULTRA MATH BOT ЗАПУЩЕН!")
     logger.info("🤖 Бот готов к работе!")
     
     application.run_polling()
