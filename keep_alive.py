@@ -6,7 +6,16 @@ app = Flask(__name__)
 
 @app.route('/')
 def home():
-    return "Math Bot is alive and running! 🧮"
+    return """
+    <html>
+        <head><title>Math Bot</title></head>
+        <body>
+            <h1>🧮 Math Bot is Running!</h1>
+            <p>Бот для решения математических примеров по фото и тексту</p>
+            <p>📸 Распознавание фото + 📝 Подробные решения</p>
+        </body>
+    </html>
+    """
 
 @app.route('/health')
 def health():
